@@ -17,8 +17,29 @@ You are a specialist for the local Firecrawl Docker Compose stack running in thi
 - `/v1/extract` is deprecated upstream in favor of `/v2/scrape` — mention this if a task uses `/v1/extract`.
 - `/v1/extract`'s reranker requires Google Gemini credentials (`GOOGLE_GENERATIVE_AI_API_KEY`, wired in `docker-compose.yaml`) — it does NOT route through the local LM Studio backend. Only `/v1/scrape` is fully local.
 
-## Health Check
+## Python Chokepoint Wrapper
 
+`firecrawl_runner.py` lives in THIS agent dir. Prefer it over raw `curl` for
+scrape/search — it enforces the **same-LM-Studio, no-parallel** rule in code
+(refuses multi-URL scrape fan-out) and resolves the binary path.
+
+```bash
+python3 firecrawl_runner.py scrape <url> --only-main-content   # markdown, no LLM
+python3 firecrawl_runner.py search "query" --limit 5           # cloud, no local LLM
+```
+
+Importable from other scripts:
+```python
+import importlib.util, os
+_p = os.path.join(os.path.dirname(__file__), "firecrawl_runner.py")
+spec = importlib.util.spec_from_file_location("firecrawl_runner", _p)
+fr = importlib.util.module_from_spec(spec); spec.loader.exec_module(fr)
+md = fr.scrape_url("https://...", timeout=90)
+```
+Mirrors the Hermes `firecrawl-helper` skill's wrapper
+(`~/.hermes/profiles/trader/skills/autonomous-ai-agents/firecrawl-helper/firecrawl_runner.py`).
+
+## Health Check
 ```bash
 docker compose ps
 curl -s -o /dev/null -w '%{http_code}\n' http://localhost:3002/v0/health/liveness
