@@ -1,0 +1,272 @@
+{
+  "info": {
+    "name": "firecrawl-integration-test",
+    "description": "Examples for the local Docker Compose Firecrawl stack, configured with a local LM Studio LLM backend. See docs/superpowers/specs/2026-07-11-local-docker-lmstudio-design.md for setup context.\n\nNo auth headers needed against {{baseUrl}} — USE_DB_AUTHENTICATION=false in .env for this local stack.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Liveness",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('Status code is 200', () => pm.response.to.have.status(200));"]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v0/health/liveness",
+              "host": ["{{baseUrl}}"],
+              "path": ["v0", "health", "liveness"]
+            },
+            "description": "Should return 200 with no body when the api container is up."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Scrape",
+      "item": [
+        {
+          "name": "Basic Markdown Scrape",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('Status code is 200', () => pm.response.to.have.status(200));"]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"url\": \"https://example.com\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/scrape",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "scrape"]
+            },
+            "description": "No LLM involved — pure fetch + markdown conversion. Good smoke test that doesn't depend on LM Studio."
+          }
+        },
+        {
+          "name": "JSON Extraction (via LM Studio)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('Status code is 200', () => pm.response.to.have.status(200));"]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"url\": \"https://example.com\",\n  \"formats\": [\"json\"],\n  \"jsonOptions\": {\n    \"schema\": {\n      \"type\": \"object\",\n      \"properties\": {\n        \"heading\": { \"type\": \"string\" }\n      },\n      \"required\": [\"heading\"]\n    },\n    \"prompt\": \"Extract the main heading text from this page.\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/scrape",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "scrape"]
+            },
+            "description": "Routes the extraction through OPENAI_BASE_URL (LM Studio) via Chat Completions. Local models are slow — expect ~15-30s. Response should have data.json.heading populated; if data.json is missing, check the api container logs for a coerceFieldsToFormats warning (schema mismatch) and cross-check LM Studio's server log."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Map",
+      "item": [
+        {
+          "name": "Site Map",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('Status code is 200', () => pm.response.to.have.status(200));"]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"url\": \"https://example.com\",\n  \"limit\": 20\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/map",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "map"]
+            },
+            "description": "Fast link discovery, no LLM/scrape involved. Good for testing the stack without waiting on LM Studio."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Crawl",
+      "item": [
+        {
+          "name": "Start Crawl",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "if (body.id) {",
+                  "  pm.collectionVariables.set('crawlId', body.id);",
+                  "  console.log('Saved crawlId:', body.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"url\": \"https://example.com\",\n  \"limit\": 5\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/crawl",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "crawl"]
+            },
+            "description": "Kicks off an async crawl job and auto-saves the returned id into the {{crawlId}} collection variable for the next request."
+          }
+        },
+        {
+          "name": "Check Crawl Status",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('Status code is 200', () => pm.response.to.have.status(200));"]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/crawl/{{crawlId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "crawl", "{{crawlId}}"]
+            },
+            "description": "Run 'Start Crawl' first to populate {{crawlId}} automatically, or set it manually."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Extract (deprecated, uses Gemini not LM Studio)",
+      "item": [
+        {
+          "name": "Deep Extract",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('Status code is 200', () => pm.response.to.have.status(200));"]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"urls\": [\"https://example.com\"],\n  \"prompt\": \"Extract the main heading text from this page.\",\n  \"schema\": {\n    \"type\": \"object\",\n    \"properties\": {\n      \"heading\": { \"type\": \"string\" }\n    },\n    \"required\": [\"heading\"]\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/extract",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "extract"]
+            },
+            "description": "Firecrawl marks /v1/extract deprecated in favor of /v2/scrape. Its reranker (lib/extract/reranker.ts) is hardcoded to Gemini and does NOT route through LM Studio — requires GOOGLE_GENERATIVE_AI_API_KEY to be set, falls back gracefully (logs a warning, returns empty relevance list) if that key is weak/missing rather than failing the whole request. Expect ~40-60s."
+          }
+        }
+      ]
+    },
+    {
+      "name": "LM Studio (debug, bypasses Firecrawl)",
+      "item": [
+        {
+          "name": "List Loaded Models",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('Status code is 200', () => pm.response.to.have.status(200));"]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{lmStudioUrl}}/v1/models",
+              "host": ["{{lmStudioUrl}}"],
+              "path": ["v1", "models"]
+            },
+            "description": "Hits LM Studio directly (not through the api container) to confirm it's reachable and which model(s) are loaded. Useful first check when a Scrape/JSON request times out."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Queue Admin (optional)",
+      "item": [
+        {
+          "name": "Bull Board",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('Status code is 200', () => pm.response.to.have.status(200));"]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/admin/{{bullAuthKey}}/queues",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "{{bullAuthKey}}", "queues"]
+            },
+            "description": "Set {{bullAuthKey}} in the environment to match BULL_AUTH_KEY in .env (not committed here — fill it in locally). Opens the Bull queue admin UI response."
+          }
+        }
+      ]
+    }
+  ],
+  "variable": [
+    { "key": "crawlId", "value": "" }
+  ]
+}
