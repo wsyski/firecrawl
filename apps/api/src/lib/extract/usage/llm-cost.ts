@@ -41,7 +41,7 @@ function estimateCost(tokenUsage: TokenUsage): number {
     const pricing = modelPrices[model] as ModelPricing;
 
     if (!pricing) {
-      logger.error(`No pricing information found for model: ${model}`);
+      logger.warn(`No pricing information found for model: ${model}`);
       return 0;
     }
 
