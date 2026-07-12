@@ -62,6 +62,13 @@ export function getModel(name: string, provider: Provider = defaultProvider) {
   if (provider === "openai" && modelName.startsWith("o3-mini")) {
     return providerList.openai.chat(modelName);
   }
+  // Custom OPENAI_BASE_URL means a third-party OpenAI-compatible server (e.g. LM Studio),
+  // which typically only implements /v1/chat/completions, not OpenAI's newer /v1/responses.
+  // The bare provider call defaults to the Responses API, silently dropping json_schema
+  // structured-output params those servers don't recognize — force Chat Completions instead.
+  if (provider === "openai" && config.OPENAI_BASE_URL) {
+    return providerList.openai.chat(modelName);
+  }
   return providerList[provider](modelName);
 }
 

@@ -568,7 +568,7 @@ const extractTransform = (obj: ScrapeOptions) => {
       obj.jsonOptions) &&
     obj.timeout === 30000
   ) {
-    obj = { ...obj, timeout: 60000 };
+    obj = { ...obj, timeout: 600000 };
   }
 
   if (
@@ -733,7 +733,7 @@ const extractV1Options = z
     origin: z.string().optional().prefault("api"),
     integration: integrationSchema.optional().transform(val => val || null),
     urlTrace: z.boolean().prefault(false),
-    timeout: z.int().positive().min(1000).prefault(60000),
+    timeout: z.int().positive().min(1000).prefault(600000),
     __experimental_streamSteps: z.boolean().prefault(false),
     __experimental_llmUsage: z.boolean().prefault(false),
     __experimental_showSources: z.boolean().prefault(false),
