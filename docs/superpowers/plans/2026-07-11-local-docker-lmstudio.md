@@ -1,5 +1,16 @@
 # Local Docker + LM Studio LLM Backend Implementation Plan
 
+> **UPDATE 2026-08-26 — backend is now llama.cpp via llama-swap, not LM Studio.** The host-side server is
+> `llama-swap` (`/opt/llm/llama-swap/llama-swap -config /opt/llm/llama-swap/config.yaml -listen :8081`),
+> which spawns `llama-server` (port 5802) running `Ornith-1.5-35B-Q4_K_M.gguf`
+> (`--reasoning-format deepseek`). Current `.env` values:
+> `OPENAI_BASE_URL=http://192.168.1.100:1234/v1` → replaced by `http://192.168.1.100:8081/v1`;
+> `MODEL_NAME=ornith-35b` (the llama-swap model-group id, currently `loaded`);
+> `OPENAI_API_KEY=<llama-swap key>` (validated). All port-1234 / LM Studio / `lms-server.sh` references
+> below are historical. Deviation 5's free-styled-keys quirk **no longer reproduces**: llama.cpp enforces
+> the request's `response_format: json_schema` as a GBNF grammar, so extraction returns exact schema keys
+> (verified live against example.com on 2026-08-26).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Run the Firecrawl stack via Docker Compose, using a local LM Studio server as the LLM backend for extraction/completion features, and verify it works end-to-end against a real scrape/extract request.
