@@ -167,3 +167,15 @@ Run: `docker compose logs api --tail=100`
 Look for: `ECONNREFUSED <IP>:1234` (either LM Studio isn't bound to `0.0.0.0`, or the LAN IP in `.env` is stale — re-check with `ip addr show enp3s0`), or `model not found` (mismatched `MODEL_NAME` — re-run `curl http://localhost:1234/v1/models` and compare the exact `id` string against `.env`).
 
 No commit for this task — verification only, no files changed.
+
+## 2026-08-30 — `MODEL_NAME` is now a fallback, not a pin
+
+The model is chosen **at request time, in `apps/api/src/lib/local-model.ts`'s `localModelFetch`**, which is installed as the `fetch` option on the OpenAI provider whenever `OPENAI_BASE_URL` is set. It rewrites the `model` field of the outgoing body to:
+
+    loaded model  →  MODEL_NAME  →  first model the server lists  →  the model the caller asked for
+
+`MODEL_NAME` is therefore the cold-start preference only, and it is optional: unset it and an idle rig lands on whatever `/v1/models` lists first. No model id appears in the code.
+
+**The first attempt resolved this synchronously inside `getModel()` and did not work.** A cached answer read synchronously is always one request stale — the request that follows an external model swap still names the old model, which is exactly the swap the change exists to prevent, and it was reproduced live. `getModel()` cannot be made `async` (default-parameter positions, ~35 call sites), so the resolution moved to the fetch layer, where the probe can be awaited. Probe results are cached 30s per process, concurrent callers coalesce onto one in-flight probe, the timeout is 5s (2s timed out during container boot), and any failure falls back without failing the scrape.
+
+Covered by `src/lib/local-model.test.ts` (8 unit tests) and `src/__tests__/snips/v2/local-model.test.ts` (2 live tests against llama-swap — cold start loads `MODEL_NAME`; a scrape immediately after an external swap leaves the resident model alone). See `AGENTS.md` for how to run the snip against the Docker stack.

@@ -29,6 +29,8 @@ export const HAS_PROXY = !!config.PROXY_SERVER;
 export const HAS_PRODUCT_SERVICE = !!config.PRODUCT_EXTRACTION_SERVICE_URL;
 export const HAS_MENU_SERVICE = !!config.MENU_EXTRACTION_SERVICE_URL;
 
+export const HAS_MODEL_SWAP = !!config.OPENAI_BASE_URL;
+
 export const HAS_SEARCH = TEST_PRODUCTION || !!config.SEARXNG_ENDPOINT;
 
 const isLocalUrl = (x: string) =>

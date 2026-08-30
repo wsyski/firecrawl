@@ -1,5 +1,6 @@
 import { createOpenAI } from "@ai-sdk/openai";
 import { config } from "../config";
+import { localModelFetch } from "./local-model";
 import { createOllama } from "ollama-ai-provider-v2";
 import { anthropic } from "@ai-sdk/anthropic";
 import { groq } from "@ai-sdk/groq";
@@ -25,6 +26,8 @@ const providerList: Record<Provider, any> = {
   openai: createOpenAI({
     apiKey: config.OPENAI_API_KEY,
     baseURL: config.OPENAI_BASE_URL,
+    // a custom base URL may be a model swapper — let it pick the resident model
+    ...(config.OPENAI_BASE_URL ? { fetch: localModelFetch } : {}),
   }), //OPENAI_API_KEY
   ollama: createOllama({
     baseURL: config.OLLAMA_BASE_URL,
