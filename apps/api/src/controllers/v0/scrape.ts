@@ -25,6 +25,7 @@ import { ScrapeJobTimeoutError } from "../../lib/error";
 import { scrapeQueue } from "../../services/worker/nuq-router";
 import { getErrorContactMessage } from "../../lib/deployment";
 import { logRequest } from "../../services/logging/log_job";
+import { externalRequestId } from "../../lib/external-request-id";
 import { getScrapeZDR } from "../../lib/zdr-helpers";
 import {
   isThreatProtectionForced,
@@ -41,6 +42,7 @@ async function scrapeHelper(
   extractorOptions: ExtractorOptions,
   timeout: number,
   flags: TeamFlags,
+  org_id: string | null,
   apiKeyId: number | null,
 ): Promise<{
   success: boolean;
@@ -70,6 +72,7 @@ async function scrapeHelper(
   if (
     isUrlBlocked(url, flags, {
       team_id,
+      org_id,
       origin: req.body?.origin ?? null,
     })
   ) {
@@ -88,6 +91,7 @@ async function scrapeHelper(
     team_id,
   );
 
+  internalOptions.orgId = org_id;
   internalOptions.saveScrapeResultToGCS = process.env
     .GCS_FIRE_ENGINE_BUCKET_NAME
     ? true
@@ -216,6 +220,7 @@ export async function scrapeController(req: Request, res: Response) {
       id: jobId,
       kind: "scrape",
       api_version: "v0",
+      external_request_id: externalRequestId(req),
       team_id,
       origin: req.body.origin ?? "api",
       integration: req.body.integration,
@@ -299,6 +304,7 @@ export async function scrapeController(req: Request, res: Response) {
       extractorOptions,
       timeout,
       chunk?.flags ?? null,
+      chunk?.org_id ?? null,
       chunk?.api_key_id ?? null,
     );
 

@@ -66,9 +66,11 @@ export async function fireclawController(
   try {
     await billTeam(
       req.auth.team_id,
-      req.acuc?.sub_id ?? undefined,
       totalCredits,
       req.acuc?.api_key_id ?? null,
+      // No chargeId: fireclaw has no per-charge identity to key on — a
+      // server-minted UUID here would be equivalent to firebill's own
+      // per-request key, so this stays keyless until fireclaw carries one.
       { endpoint: "fireclaw" },
     );
   } catch (error) {

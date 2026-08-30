@@ -49,7 +49,6 @@ const MONITOR_CHECK_PAGE_BATCH_SIZE = 1000;
 type MonitorCreditMetadata = {
   creditsUsed?: unknown;
   numPages?: unknown;
-  proxyUsed?: unknown;
   postprocessorsUsed?: unknown;
 };
 
@@ -95,10 +94,8 @@ function requestsJsonChangeTracking(formats: unknown): boolean {
 
 function estimateBaseCreditsPerPage(
   options: MonitorTarget["scrapeOptions"],
-  params: { includeProxy?: boolean } = {},
 ): number {
   const formats = options?.formats;
-  const includeProxy = params.includeProxy ?? true;
   const usesDeterministicJson = hasFormatOfType(formats, "deterministicJson");
   const usesJsonCredits =
     hasFormatOfType(formats, "json") || requestsJsonChangeTracking(formats);
@@ -128,13 +125,6 @@ function estimateBaseCreditsPerPage(
   }
 
   if (hasFormatOfType(formats, "video")) {
-    credits += SCRAPE_OPTION_CREDIT_BONUS;
-  }
-
-  if (
-    includeProxy &&
-    (options?.proxy === "stealth" || options?.proxy === "enhanced")
-  ) {
     credits += SCRAPE_OPTION_CREDIT_BONUS;
   }
 
@@ -230,9 +220,7 @@ export function calculateMonitorCheckActualCreditsFromPages(
   const baseCreditsByTarget = new Map(
     targets.map(target => [
       target.id,
-      estimateBaseCreditsPerPage(target.scrapeOptions, {
-        includeProxy: false,
-      }),
+      estimateBaseCreditsPerPage(target.scrapeOptions),
     ]),
   );
   const targetsById = new Map(targets.map(target => [target.id, target]));
@@ -261,18 +249,6 @@ export function calculateMonitorCheckActualCreditsFromPages(
       metadata.numPages > 1
     ) {
       credits += metadata.numPages - 1;
-    }
-
-    const requestedPremiumProxy =
-      target?.scrapeOptions?.proxy === "stealth" ||
-      target?.scrapeOptions?.proxy === "enhanced";
-    const usedPremiumProxy =
-      metadata?.proxyUsed === "stealth" || metadata?.proxyUsed === "enhanced";
-    if (
-      usedPremiumProxy ||
-      (metadata?.proxyUsed == null && requestedPremiumProxy)
-    ) {
-      credits += SCRAPE_OPTION_CREDIT_BONUS;
     }
 
     if (
@@ -375,6 +351,8 @@ export async function createMonitor(params: {
   input: CreateMonitorRequest;
   nextRunAt: Date;
   intervalMs: number;
+  /** Partner's `External-Request-Id`; a scheduled run writes no requests row to find it on later. */
+  partnerJobToken?: string | null;
 }): Promise<MonitorRow> {
   const targets = ensureTargetIds(params.input.targets);
   const judgeEnabled =
@@ -387,7 +365,7 @@ export async function createMonitor(params: {
   const estimatedCreditsPerMonth =
     estimatedCreditsPerRun * estimateRunsPerMonth(params.intervalMs);
 
-  // Omit goal/judge_enabled when undefined so a pre-migration DB doesn't reject the insert.
+  // Omit goal/judge_enabled/partner_job_token when undefined so a pre-migration DB doesn't reject the insert.
   const insert: typeof schema.monitors.$inferInsert = {
     id: uuidv7(),
     team_id: params.teamId,
@@ -401,6 +379,9 @@ export async function createMonitor(params: {
     webhook: params.input.webhook ?? null,
     notification: params.input.notification ?? null,
   };
+  if (params.partnerJobToken) {
+    insert.partner_job_token = params.partnerJobToken;
+  }
   if (params.input.goal !== undefined) {
     insert.goal = normalizeGoal(params.input.goal);
   }
@@ -781,7 +762,7 @@ export async function listRunningMonitorChecks(
 ): Promise<MonitorCheckRow[]> {
   const data = await run(
     () =>
-      db
+      dbRr
         .select()
         .from(schema.monitor_checks)
         .where(eq(schema.monitor_checks.status, "running"))
@@ -819,6 +800,60 @@ export async function listMonitorChecks(params: {
     "Failed to list monitor checks",
   );
   return data as MonitorCheckRow[];
+}
+
+/**
+ * The leading run of credit-skipped checks ending at the newest, so one
+ * successful check resets it. Derived rather than counted: a stored counter
+ * would be a second source of truth to keep correct across retries.
+ */
+export async function countRecentConsecutiveSkippedForCredits(params: {
+  teamId: string;
+  monitorId: string;
+  limit: number;
+}): Promise<number> {
+  const rows = await run(
+    () =>
+      dbRr
+        .select({ status: schema.monitor_checks.status })
+        .from(schema.monitor_checks)
+        .where(
+          and(
+            eq(schema.monitor_checks.monitor_id, params.monitorId),
+            eq(schema.monitor_checks.team_id, params.teamId),
+          ),
+        )
+        .orderBy(desc(schema.monitor_checks.created_at))
+        .limit(params.limit),
+    "Failed to count skipped monitor checks",
+  );
+
+  let streak = 0;
+  for (const row of rows) {
+    if (row.status !== "skipped_no_credits") break;
+    streak += 1;
+  }
+  return streak;
+}
+
+/**
+ * `paused`, not `deleted`: nothing a partner says should destroy a customer's
+ * configuration. `monitoring_claim_due_monitors` only claims `active` rows, so
+ * this is enough to stop the runs.
+ */
+export async function pauseMonitor(monitorId: string): Promise<void> {
+  await run(
+    () =>
+      db
+        .update(schema.monitors)
+        .set({
+          status: "paused",
+          next_run_at: null,
+          updated_at: new Date().toISOString(),
+        })
+        .where(eq(schema.monitors.id, monitorId)),
+    "Failed to pause monitor",
+  );
 }
 
 export async function updateMonitorCheck(

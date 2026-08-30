@@ -11,7 +11,10 @@ import {
 } from "./types";
 import { v7 as uuidv7 } from "uuid";
 import { hasFormatOfType } from "../../lib/format-utils";
-import { TransportableError } from "../../lib/error";
+import {
+  getTimeoutProcessingDetails,
+  TransportableError,
+} from "../../lib/error";
 import { NuQJob } from "../../services/worker/nuq";
 import { checkPermissions } from "../../lib/permissions";
 import {
@@ -25,19 +28,22 @@ import { ScrapeJobData } from "../../types";
 import { teamConcurrencySemaphore } from "../../services/worker/team-semaphore";
 import { getJobPriority } from "../../lib/job-priority";
 import { logRequest } from "../../services/logging/log_job";
+import { externalRequestId } from "../../lib/external-request-id";
 import { getErrorContactMessage } from "../../lib/deployment";
 import { captureExceptionWithZdrCheck } from "../../services/sentry";
 import type { BillingMetadata } from "../../services/billing/types";
 import { getScrapeZDR } from "../../lib/zdr-helpers";
 import {
-  KEYLESS_FREE_TIER_LIMIT_MESSAGE,
   adjustKeylessCredits,
+  keylessLimitBody,
   logKeylessCreditUsage,
   reserveKeylessCredits,
 } from "../../lib/keyless";
 import { projectScrapeCredits } from "../../lib/keyless-credit-projection";
 import { applyAgentAuthDiscoveryHeader } from "../../lib/agent-auth-discovery";
 import { resolveThreatProtection } from "../../lib/threat-protection/request";
+import { getEffectiveConcurrencyLimit } from "../../lib/concurrency-limit";
+import { isAgentInteropSecretValid } from "../../lib/agent-interop";
 
 const AGENT_INTEROP_CONCURRENCY_BOOST = 3;
 
@@ -147,7 +153,7 @@ export async function scrapeController(
       if (
         req.body.__agentInterop &&
         config.AGENT_INTEROP_SECRET &&
-        req.body.__agentInterop.auth !== config.AGENT_INTEROP_SECRET
+        !isAgentInteropSecretValid(req.body.__agentInterop.auth)
       ) {
         return res.status(403).json({
           success: false,
@@ -185,10 +191,9 @@ export async function scrapeController(
         );
         if (!reservation.ok) {
           applyAgentAuthDiscoveryHeader(res);
-          return res.status(429).json({
-            success: false,
-            error: KEYLESS_FREE_TIER_LIMIT_MESSAGE,
-          });
+          return res
+            .status(429)
+            .json(await keylessLimitBody(req.auth.team_id, "v2_scrape"));
         }
         reservedKeylessCredits = projectedKeylessCredits;
       }
@@ -220,6 +225,7 @@ export async function scrapeController(
           id: jobId,
           kind: "scrape",
           api_version: "v2",
+          external_request_id: externalRequestId(req),
           team_id: req.auth.team_id,
           origin: req.body.origin ?? "api",
           integration: req.body.integration,
@@ -264,7 +270,10 @@ export async function scrapeController(
         }
         req.on("close", () => aborter.abort());
 
-        const baseConcurrency = req.acuc?.concurrency || 1;
+        const baseConcurrency = await getEffectiveConcurrencyLimit(
+          req.auth.team_id,
+          req.acuc?.org_id,
+        );
         const concurrency = boostConcurrency
           ? baseConcurrency * AGENT_INTEROP_CONCURRENCY_BOOST
           : baseConcurrency;
@@ -328,6 +337,8 @@ export async function scrapeController(
                       bypassBilling: isDirectToBullMQ || !shouldBill,
                       zeroDataRetention,
                       teamFlags: req.acuc?.flags ?? null,
+                      orgId: req.acuc?.org_id ?? null,
+                      teamConcurrency: baseConcurrency,
                       agentIndexOnly: (req as any).agentIndexOnly ?? false,
                       threatProtection: threatProtection.policy ?? undefined,
                     },
@@ -367,7 +378,9 @@ export async function scrapeController(
         }
 
         const timeoutErr =
-          e instanceof TransportableError && e.code === "SCRAPE_TIMEOUT";
+          e instanceof TransportableError &&
+          (e.code === "SCRAPE_TIMEOUT" ||
+            e.code === "CONCURRENCY_QUEUE_TIMEOUT");
 
         setSpanAttributes(span, {
           "scrape.error": e instanceof Error ? e.message : String(e),
@@ -451,14 +464,57 @@ export async function scrapeController(
             });
           }
 
-          const statusCode = e.code === "SCRAPE_TIMEOUT" ? 408 : 500;
+          if (e.code === "SCRAPE_MEDIA_ACCESS_DENIED") {
+            setSpanAttributes(span, {
+              "scrape.status_code": 403,
+            });
+            return res.status(403).json({
+              success: false,
+              code: e.code,
+              error: e.message,
+            });
+          }
+
+          if (e.code === "SCRAPE_PROMPT_INJECTION_DETECTED") {
+            setSpanAttributes(span, {
+              "scrape.status_code": 403,
+            });
+            return res.status(403).json({
+              success: false,
+              code: e.code,
+              error: e.message,
+            });
+          }
+
+          if (e.code === "SCRAPE_JSON_CONTENT_TOO_LARGE") {
+            setSpanAttributes(span, {
+              "scrape.status_code": 400,
+            });
+            return res.status(400).json({
+              success: false,
+              code: e.code,
+              error: e.message,
+            });
+          }
+
+          const statusCode = timeoutErr ? 408 : 500;
           setSpanAttributes(span, {
             "scrape.status_code": statusCode,
           });
+          // Large-PDF timeouts where the fire-pdf job keeps processing
+          // server-side carry structured retry guidance: surface it as
+          // `details` plus a standard Retry-After header so clients (and
+          // retry libraries) know a timed retry returns the finished
+          // result instead of restarting the work.
+          const processing = getTimeoutProcessingDetails(e);
+          if (processing) {
+            res.setHeader("Retry-After", String(processing.retryAfterSeconds));
+          }
           return res.status(statusCode).json({
             success: false,
             code: e.code,
             error: e.message,
+            ...(processing && { details: processing }),
           });
         } else {
           const id = uuidv7();

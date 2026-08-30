@@ -31,14 +31,16 @@ export type AuthCreditUsageChunkRow = Record<string, any> & {
 export async function authCreditUsageChunk(
   database: DB,
   input_key: string,
+  input_credential_purpose: "general" | "hosted_mcp_oauth" = "general",
 ): Promise<AuthCreditUsageChunkRow[]> {
   const rows = await execRows<AuthCreditUsageChunkRow>(
     database,
-    sql`select * from auth_credit_usage_chunk_52(input_key => ${input_key})`,
+    sql`select * from auth_chunk_1(input_key => ${input_key}, input_credential_purpose => ${input_credential_purpose})`,
   );
   // api_key_id is a bigint column, so the pg driver hands it back as a string.
   for (const row of rows) {
     if (row.api_key_id != null) {
+      row.api_key_id_text = String(row.api_key_id);
       row.api_key_id = toNum(row.api_key_id);
     }
   }
@@ -51,7 +53,7 @@ export function authCreditUsageChunkFromTeam(
 ): Promise<AuthCreditUsageChunkRow[]> {
   return execRows(
     database,
-    sql`select * from auth_credit_usage_chunk_52_from_team(input_team => ${input_team})`,
+    sql`select * from auth_chunk_1_from_team(input_team => ${input_team})`,
   );
 }
 
@@ -73,17 +75,16 @@ export function agentConsumeFreeRequestIfLeft(
   );
 }
 
-export function billTeam6(params: {
+export function billTeam7(params: {
   team_id: string;
   subscription_id: string | null;
-  fetch_subscription: boolean;
   credits: number;
   api_key_id: number | null;
   is_extract: boolean;
 }): Promise<{ api_key: string }[]> {
   return execRows(
     db,
-    sql`select * from bill_team_6(_team_id => ${params.team_id}, sub_id => ${params.subscription_id}, fetch_subscription => ${params.fetch_subscription}, credits => ${params.credits}, i_api_key_id => ${params.api_key_id}, is_extract_param => ${params.is_extract})`,
+    sql`select * from bill_team_7(_team_id => ${params.team_id}, sub_id => ${params.subscription_id}, credits => ${params.credits}, i_api_key_id => ${params.api_key_id}, is_extract_param => ${params.is_extract})`,
   );
 }
 
@@ -99,11 +100,16 @@ export async function changeTrackingInsertScrape(params: {
   );
 }
 
+// `database` is a parameter because callers split between the primary and the
+// read replica: status controllers (informational `creditsUsed`) read from the
+// replica, while crawl finalization (crawl-logic) reads its own recent billing
+// writes and must stay on the primary.
 export function creditsBilledByCrawlId(
+  database: DB,
   i_crawl_id: string,
 ): Promise<{ credits_billed: number }[]> {
   return execRows(
-    db,
+    database,
     sql`select * from credits_billed_by_crawl_id_2(i_crawl_id => ${i_crawl_id})`,
   );
 }
@@ -137,10 +143,6 @@ export function monitoringClaimDueMonitors<T = Record<string, any>>(params: {
     db,
     sql`select * from monitoring_claim_due_monitors(p_worker_id => ${params.workerId}, p_limit => ${params.limit}, p_lease_seconds => ${params.leaseSeconds})`,
   );
-}
-
-export async function updateTallyTeam(i_team_id: string): Promise<void> {
-  await db.execute(sql`select update_tally_10_team(i_team_id => ${i_team_id})`);
 }
 
 // ============================================================================

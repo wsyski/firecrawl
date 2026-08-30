@@ -5,6 +5,8 @@ import path from "path";
 import os from "os";
 import { writeFile } from "fs/promises";
 import { Meta } from "../..";
+import { documentExtensionFromContentType } from "../../../../lib/document-formats";
+import { downloadFireEngineGcsFile } from "./downloadGcsFile";
 
 async function feResToFilePrefetch(
   logger: Logger,
@@ -12,8 +14,11 @@ async function feResToFilePrefetch(
   fileExtension: string,
   fileType: string,
   contentType?: string,
+  signal?: AbortSignal,
+  maxFileBytes?: number,
 ): Promise<Meta["pdfPrefetch"] | Meta["documentPrefetch"]> {
-  if (!feRes?.file) {
+  const file = feRes?.file;
+  if (!file || (file.content === undefined && file.gcs_uri === undefined)) {
     logger.warn(`No file in ${fileType} prefetch`);
     return null;
   }
@@ -22,7 +27,33 @@ async function feResToFilePrefetch(
     os.tmpdir(),
     `tempFile-${crypto.randomUUID()}.${fileExtension}`,
   );
-  await writeFile(filePath, Buffer.from(feRes.file.content, "base64"));
+
+  let gcsReference: NonNullable<Meta["pdfPrefetch"]>["gcsReference"];
+  if (file.content !== undefined) {
+    await writeFile(filePath, Buffer.from(file.content, "base64"));
+  } else {
+    // Large-file handoff: fire-engine uploaded the bytes to GCS instead of
+    // inlining hundreds of MB of base64 through its response and job store.
+    // Materialize a local copy (magic-byte sniffing and page-count detection
+    // need bytes on disk) and keep the reference so the FirePDF by-reference
+    // path can server-side copy the object instead of re-uploading it.
+    const downloaded = await downloadFireEngineGcsFile(
+      logger,
+      { uri: file.gcs_uri!, sha256: file.sha256, sizeBytes: file.size_bytes },
+      filePath,
+      signal,
+      maxFileBytes,
+    );
+    if (downloaded === null) {
+      return null;
+    }
+    gcsReference = {
+      uri: file.gcs_uri!,
+      sha256: file.sha256,
+      sizeBytes: downloaded.sizeBytes,
+      generation: downloaded.generation,
+    };
+  }
 
   return {
     status: feRes.pageStatusCode,
@@ -30,14 +61,27 @@ async function feResToFilePrefetch(
     filePath,
     proxyUsed: feRes.usedMobileProxy ? "stealth" : "basic",
     contentType,
+    // References are only produced for PDFs; the document prefetch shape
+    // does not carry one.
+    ...(fileType === "pdf" && gcsReference ? { gcsReference } : {}),
   };
 }
 
 async function feResToPdfPrefetch(
   logger: Logger,
   feRes: FireEngineCheckStatusSuccess | undefined,
+  signal?: AbortSignal,
+  maxFileBytes?: number,
 ): Promise<Meta["pdfPrefetch"]> {
-  return feResToFilePrefetch(logger, feRes, "pdf", "pdf");
+  return feResToFilePrefetch(
+    logger,
+    feRes,
+    "pdf",
+    "pdf",
+    undefined,
+    signal,
+    maxFileBytes,
+  );
 }
 
 async function feResToDocumentPrefetch(
@@ -46,23 +90,8 @@ async function feResToDocumentPrefetch(
   contentType: string,
 ): Promise<Meta["documentPrefetch"]> {
   // Determine file extension from content type
-  let extension = "tmp";
-  if (contentType.includes("wordprocessingml")) {
-    // Modern .docx format (Office Open XML)
-    extension = "docx";
-  } else if (contentType.includes("msword")) {
-    // Legacy .doc format (OLE2/CFB binary)
-    extension = "doc";
-  } else if (
-    contentType.includes("spreadsheetml") ||
-    contentType.includes("ms-excel")
-  ) {
-    extension = "xlsx";
-  } else if (contentType.includes("opendocument.text")) {
-    extension = "odt";
-  } else if (contentType.includes("rtf")) {
-    extension = "rtf";
-  }
+  const extension =
+    documentExtensionFromContentType(contentType)?.slice(1) ?? "tmp";
 
   return feResToFilePrefetch(logger, feRes, extension, "document", contentType);
 }
@@ -71,10 +100,28 @@ export async function specialtyScrapeCheck(
   logger: Logger,
   headers: Record<string, string> | undefined,
   feRes?: FireEngineCheckStatusSuccess,
+  /** Scrape abort signal — stops a large-PDF handoff download when the
+   * request has been cancelled or timed out. */
+  signal?: AbortSignal,
+  /** Admission cap for handoff downloads — the historical download cap when
+   * the FirePDF by-reference route is unreachable for this request, so an
+   * unusable large handoff never consumes network and temp disk. */
+  maxFileBytes?: number,
 ) {
   const contentType = (Object.entries(headers ?? {}).find(
     x => x[0].toLowerCase() === "content-type",
   ) ?? [])[1];
+
+  // A GCS reference is a PDF signal on its own — fire-engine only hands
+  // off verified PDFs — so it is handled before the content-type guard:
+  // some responses omit the header entirely, and the reference must still
+  // reach the FirePDF path.
+  if (feRes?.file?.gcs_uri !== undefined) {
+    throw new AddFeatureError(
+      ["pdf"],
+      await feResToPdfPrefetch(logger, feRes, signal, maxFileBytes),
+    );
+  }
 
   if (!contentType) {
     logger.warn("Failed to check contentType -- was not present in headers", {
@@ -83,17 +130,7 @@ export async function specialtyScrapeCheck(
     return;
   }
 
-  const documentTypes = [
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    "application/vnd.ms-excel",
-    "application/msword",
-    "application/rtf",
-    "text/rtf",
-    "application/vnd.oasis.opendocument.text",
-  ];
-
-  const isDocument = documentTypes.some(type => contentType.startsWith(type));
+  const isDocument = documentExtensionFromContentType(contentType) !== null;
   const isPdf =
     contentType === "application/pdf" ||
     contentType.startsWith("application/pdf;");
@@ -113,10 +150,10 @@ export async function specialtyScrapeCheck(
   // Legacy Office files (.doc, .xls) are OLE2/CFB files starting with D0 CF 11 E0 (base64: "0M8R4K")
   if (isOctetStream) {
     const isZipSignature =
-      feRes?.file?.content.startsWith("UEsD") ||
+      feRes?.file?.content?.startsWith("UEsD") ||
       feRes?.content.startsWith("PK");
     const isOleSignature =
-      feRes?.file?.content.startsWith("0M8R4K") ||
+      feRes?.file?.content?.startsWith("0M8R4K") ||
       feRes?.content.startsWith("\xD0\xCF\x11\xE0");
 
     if (isZipSignature) {
@@ -142,18 +179,24 @@ export async function specialtyScrapeCheck(
     }
   }
 
-  // Check for PDF
+  // Check for PDF (references were already handled above the header guard).
   if (isPdf) {
-    throw new AddFeatureError(["pdf"], await feResToPdfPrefetch(logger, feRes));
+    throw new AddFeatureError(
+      ["pdf"],
+      await feResToPdfPrefetch(logger, feRes, signal, maxFileBytes),
+    );
   }
 
   // Check for octet-stream with PDF signature
   if (
     isOctetStream &&
-    (feRes?.file?.content.startsWith("JVBERi0") ||
+    (feRes?.file?.content?.startsWith("JVBERi0") ||
       feRes?.content.startsWith("%PDF-"))
   ) {
-    throw new AddFeatureError(["pdf"], await feResToPdfPrefetch(logger, feRes));
+    throw new AddFeatureError(
+      ["pdf"],
+      await feResToPdfPrefetch(logger, feRes, signal, maxFileBytes),
+    );
   }
 
   // Reject unsupported binary content types (images, video, audio, archives, etc.)

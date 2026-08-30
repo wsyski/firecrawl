@@ -535,6 +535,98 @@ export class AudioUnsupportedUrlError extends TransportableError {
   }
 }
 
+export class MediaAccessDeniedError extends TransportableError {
+  constructor(message?: string) {
+    super(
+      "SCRAPE_MEDIA_ACCESS_DENIED",
+      message ??
+        "Access to the requested content was denied, so it cannot be retrieved.",
+    );
+  }
+
+  serialize() {
+    return super.serialize();
+  }
+
+  static deserialize(
+    _: ErrorCodes,
+    data: ReturnType<typeof this.prototype.serialize>,
+  ) {
+    const x = new MediaAccessDeniedError(data.message);
+    x.stack = data.stack;
+    return x;
+  }
+}
+
+export class PromptInjectionDetectedError extends TransportableError {
+  constructor(message?: string) {
+    super(
+      "SCRAPE_PROMPT_INJECTION_DETECTED",
+      message ??
+        "The scraped page content appears to contain a prompt injection attempt, so JSON extraction was aborted for safety.",
+    );
+  }
+
+  serialize() {
+    return super.serialize();
+  }
+
+  static deserialize(
+    _: ErrorCodes,
+    data: ReturnType<typeof this.prototype.serialize>,
+  ) {
+    const x = new PromptInjectionDetectedError(data.message);
+    x.stack = data.stack;
+    return x;
+  }
+}
+
+export class JsonExtractionContentTooLargeError extends TransportableError {
+  constructor(message?: string) {
+    super(
+      "SCRAPE_JSON_CONTENT_TOO_LARGE",
+      message ??
+        "The scraped page content is too large for JSON extraction, so extraction was aborted.",
+    );
+  }
+
+  serialize() {
+    return super.serialize();
+  }
+
+  static deserialize(
+    _: ErrorCodes,
+    data: ReturnType<typeof this.prototype.serialize>,
+  ) {
+    const x = new JsonExtractionContentTooLargeError(data.message);
+    x.stack = data.stack;
+    return x;
+  }
+}
+
+const MAX_MEDIA_SERVICE_MESSAGE_LENGTH = 500;
+
+// The media service reports terminal, user-facing failures as a structured
+// error body ({ detail: { code, message } }, in contrast to its string detail
+// for internal failures); relay the curated message to the user.
+export function throwIfMediaAccessDenied(errorBody: unknown): void {
+  if (
+    typeof errorBody === "object" &&
+    errorBody !== null &&
+    "detail" in errorBody &&
+    typeof errorBody.detail === "object" &&
+    errorBody.detail !== null &&
+    "code" in errorBody.detail &&
+    typeof errorBody.detail.code === "string" &&
+    "message" in errorBody.detail &&
+    typeof errorBody.detail.message === "string"
+  ) {
+    throw new MediaAccessDeniedError(
+      errorBody.detail.message.slice(0, MAX_MEDIA_SERVICE_MESSAGE_LENGTH),
+    );
+  }
+}
+
 export class VideoUnsupportedUrlError extends TransportableError {
   constructor(message?: string) {
     super(

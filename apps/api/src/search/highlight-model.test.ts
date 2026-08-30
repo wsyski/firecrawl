@@ -5,7 +5,10 @@ vi.mock("../config", () => ({
   },
 }));
 
-import { generateHighlightsBatch } from "./highlight-model";
+import {
+  generateHighlightsBatch,
+  generateHighlightsIndexedBatch,
+} from "./highlight-model";
 import { config } from "../config";
 
 const logger = {
@@ -27,11 +30,41 @@ function mockFetchOnce(body: unknown, ok = true, status = 200) {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.clearAllMocks();
 });
 
 describe("generateHighlightsBatch", () => {
+  it("posts lightweight index references to the indexed Stage 1 endpoint", async () => {
+    const fetchMock = mockFetchOnce({ pages: [] });
+
+    await generateHighlightsIndexedBatch(
+      "q1",
+      [
+        {
+          id: "0",
+          url: "https://first.test/path",
+          indexObject: "index-object.json",
+        },
+      ],
+      { logger, logPayload: false, requestId: "request-1" },
+    );
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("https://highlight.test/batch_highlight_indexed");
+    expect(JSON.parse(init.body)).toEqual({
+      query: "q1",
+      pages: [
+        {
+          id: "0",
+          url: "https://first.test/path",
+          indexObject: "index-object.json",
+        },
+      ],
+    });
+  });
+
   it("posts every page to one /batch_highlight call with the bearer token", async () => {
     const fetchMock = mockFetchOnce({ pages: [] });
 
@@ -172,6 +205,35 @@ describe("generateHighlightsBatch", () => {
 
   it("returns null when the service errors", async () => {
     mockFetchOnce({ error: "boom" }, false, 500);
+    const onFailure = vi.fn();
+
+    const out = await generateHighlightsBatch(
+      "q",
+      [{ id: "0", markdown: "md" }],
+      { logger, onFailure },
+    );
+
+    expect(out).toBeNull();
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(onFailure).toHaveBeenCalledWith("http_5xx");
+    expect(logger.warn).toHaveBeenCalled();
+  });
+
+  it("retries one transient server failure", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        text: async () => "unavailable",
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ pages: [] }),
+        text: async () => "",
+      });
+    vi.stubGlobal("fetch", fetchMock);
 
     const out = await generateHighlightsBatch(
       "q",
@@ -179,8 +241,57 @@ describe("generateHighlightsBatch", () => {
       { logger },
     );
 
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(out).toEqual(new Map());
+  });
+
+  it.each([null, []])(
+    "classifies malformed JSON response %j as invalid",
+    async body => {
+      mockFetchOnce(body);
+      const onFailure = vi.fn();
+
+      const out = await generateHighlightsBatch(
+        "q",
+        [{ id: "0", markdown: "md" }],
+        { logger, onFailure },
+      );
+
+      expect(out).toBeNull();
+      expect(onFailure).toHaveBeenCalledWith("invalid_response");
+    },
+  );
+
+  it("does not retry after the request deadline aborts during backoff", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn().mockImplementation(
+      () =>
+        new Promise(resolve =>
+          setTimeout(
+            () =>
+              resolve({
+                ok: false,
+                status: 503,
+                text: async () => "unavailable",
+              }),
+            29_990,
+          ),
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const onFailure = vi.fn();
+
+    const resultPromise = generateHighlightsBatch(
+      "q",
+      [{ id: "0", markdown: "md" }],
+      { logger, onFailure },
+    );
+    await vi.advanceTimersByTimeAsync(30_000);
+    const out = await resultPromise;
+
     expect(out).toBeNull();
-    expect(logger.warn).toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(onFailure).toHaveBeenCalledWith("timeout");
   });
 
   it("falls back to legacy per-page calls while the old service URL is configured", async () => {

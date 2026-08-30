@@ -43,7 +43,6 @@ import {
   NoCachedDataError,
   LockdownMissError,
   DNSResolutionError,
-  ZDRViolationError,
   PDFPrefetchFailed,
   DocumentPrefetchFailed,
   FEPageLoadFailed,
@@ -77,17 +76,24 @@ import {
 } from "./lib/abortManager";
 import {
   ScrapeJobTimeoutError,
+  composeTimeoutProcessing,
   CrawlDenialError,
   ActionsNotSupportedError,
 } from "../../lib/error";
 import { htmlTransform } from "./lib/removeUnwantedElements";
 import { postprocessors } from "./postprocessors";
 import { rewriteUrl } from "./lib/rewriteUrl";
+import {
+  DOCUMENT_EXTENSIONS,
+  documentContentTypeFromExtension,
+  documentExtensionFromContentType,
+  documentExtensionFromUrlPath,
+} from "../../lib/document-formats";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
-import type { DataLayerScrapeMetadata } from "../../lib/data-layer";
+import type { ExchangeScrapeMetadata } from "../../lib/exchange";
 import {
   checkUrl,
   type ThreatCheckDedup,
@@ -102,7 +108,7 @@ export type ScrapeUrlResponse =
       success: true;
       document: Document;
       unsupportedFeatures?: Set<FeatureFlag>;
-      dataLayer?: DataLayerScrapeMetadata;
+      exchange?: ExchangeScrapeMetadata;
       /**
        * Threat protection decisions made for this scrape (initial domain
        * check + any redirect re-checks, in order). Read by the billing layer
@@ -146,9 +152,48 @@ export type Meta = {
         status: number;
         proxyUsed: "basic" | "stealth";
         contentType?: string;
+        /** Set when fire-engine handed the file off by GCS reference (large
+         * PDFs): the object it uploaded, so the FirePDF by-reference path
+         * can server-side copy it instead of re-uploading the bytes. The
+         * local filePath is still materialized (sniffing and page-count
+         * detection need bytes on disk). */
+        gcsReference?: {
+          uri: string;
+          sha256?: string;
+          sizeBytes?: number;
+          /** int64 as the SDK's string form — never rounded through a JS
+           * number. */
+          generation?: string;
+        };
       }
     | null
     | undefined; // undefined: no prefetch yet, null: prefetch came back empty
+  /** Live state of a by-reference FirePDF job (large PDFs) this scrape
+   * submitted or adopted. Such jobs outlive an abandoned scrape BY
+   * DESIGN (see fire-pdf/async.ts's cancel policy), so a SCRAPE_TIMEOUT
+   * uses this to tell the caller processing continues and when a retry
+   * of the same URL will pick up the finished result.
+   *
+   * Shaped as a mutable container (like `threatDecisions`) on purpose:
+   * engine dispatch and the pdf engine hand out SPREAD COPIES of meta,
+   * and only the shared inner object makes writes from those copies
+   * visible to the outer timeout handler here. Set by fire-pdf/async.ts;
+   * `current` is cleared when the job reaches a terminal state within
+   * this scrape's lifetime. */
+  largePdfProcessing?: {
+    current?: {
+      jobScrapeId: string;
+      pagesEstimate?: number;
+      submittedAtMs: number;
+      jobDeadlineAtMs?: number;
+      lastStatus: "queued" | "published" | "running";
+      /** fire-pdf's live remaining estimate from the last poll that
+       * carried one, with its observation time — one atomic datum,
+       * preferred over the static per-page math when composing the
+       * timeout message. */
+      serverEstimate?: { remainingMs: number; observedAtMs: number };
+    };
+  };
   documentPrefetch:
     | {
         filePath: string;
@@ -246,19 +291,7 @@ function buildFeatureFlags(
   const lowerPath = urlO.pathname.toLowerCase();
 
   // Check for document types first (they take precedence over PDF)
-  const isDocument =
-    lowerPath.endsWith(".docx") ||
-    lowerPath.endsWith(".odt") ||
-    lowerPath.endsWith(".rtf") ||
-    lowerPath.endsWith(".xlsx") ||
-    lowerPath.endsWith(".xls") ||
-    lowerPath.includes(".docx/") ||
-    lowerPath.includes(".odt/") ||
-    lowerPath.includes(".rtf/") ||
-    lowerPath.includes(".xlsx/") ||
-    lowerPath.includes(".xls/");
-
-  if (isDocument) {
+  if (documentExtensionFromUrlPath(lowerPath) !== null) {
     flags.add("document");
   } else if (lowerPath.endsWith(".pdf") || lowerPath.includes(".pdf/")) {
     // Only add PDF flag if it's not a document
@@ -277,15 +310,6 @@ function buildFeatureFlags(
 // The meta object is usually immutable, except for the logs array, and in edge cases (e.g. a new feature is suddenly required)
 // Having a meta object that is treated as immutable helps the code stay clean and easily tracable,
 // while also retaining the benefits that WebScraper had from its OOP design.
-const DOCUMENT_EXTENSIONS = new Set([
-  ".docx",
-  ".doc",
-  ".odt",
-  ".rtf",
-  ".xlsx",
-  ".xls",
-]);
-
 const HTML_EXTENSIONS = new Set([".html", ".htm", ".xhtml"]);
 
 async function writeUploadedFileToTemp(
@@ -315,20 +339,9 @@ function isPdfUpload(filename: string, contentType?: string): boolean {
 
 function isDocumentUpload(filename: string, contentType?: string): boolean {
   const ext = path.extname(filename).toLowerCase();
-  const normalizedType = contentType?.toLowerCase() ?? "";
   return (
     DOCUMENT_EXTENSIONS.has(ext) ||
-    normalizedType.includes(
-      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    ) ||
-    normalizedType.includes("application/vnd.ms-excel") ||
-    normalizedType.includes(
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    ) ||
-    normalizedType.includes("application/msword") ||
-    normalizedType.includes("application/vnd.oasis.opendocument.text") ||
-    normalizedType.includes("application/rtf") ||
-    normalizedType.includes("text/rtf")
+    documentExtensionFromContentType(contentType) !== null
   );
 }
 
@@ -420,6 +433,7 @@ async function buildMetaObject(
         proxyUsed: "basic",
         contentType:
           contentType ||
+          documentContentTypeFromExtension(fallbackExtension) ||
           "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       };
     } else if (isHtmlUpload(filename, contentType)) {
@@ -470,6 +484,7 @@ async function buildMetaObject(
     fetchPrefetch,
     costTracking,
     threatDecisions: [],
+    largePdfProcessing: {},
   };
 }
 
@@ -493,6 +508,16 @@ export type InternalOptions = {
   bypassBilling?: boolean;
   zeroDataRetention?: boolean;
   teamFlags?: TeamFlags;
+  /** Team's org, snapshotted from the request ACUC at acceptance (same
+   * pattern as teamFlags). Rides the job payload so org-scoped blocklist
+   * checks work without re-fetching the chunk. Required so a payload
+   * builder cannot silently omit the org and skip org-scoped enforcement;
+   * pass null when the caller genuinely has no org (internal/system work). */
+  orgId: string | null;
+  /** Team's sold concurrency, snapshotted from the request ACUC at
+   * acceptance (same pattern as teamFlags). Rides the job payload so
+   * downstream engines (FirePDF async account context) never re-fetch. */
+  teamConcurrency?: number | null;
 
   /**
    * Effective threat protection policy for this scrape, resolved at the
@@ -551,6 +576,7 @@ async function scrapeURLLoopIter(
     const hasQuestion = hasFormatOfType(meta.options.formats, "question");
     const hasHighlights = hasFormatOfType(meta.options.formats, "highlights");
     const hasQuery = hasFormatOfType(meta.options.formats, "query");
+    const hasRawBase64 = hasFormatOfType(meta.options.formats, "rawBase64");
     const needsMarkdown =
       hasMarkdown ||
       hasChangeTracking ||
@@ -564,7 +590,9 @@ async function scrapeURLLoopIter(
     const htmlSize = engineResult.html?.length ?? 0;
     const shouldSkipMarkdownCheck = htmlSize > MAX_HTML_SIZE_FOR_MARKDOWN_CHECK;
 
-    if (
+    if (hasRawBase64) {
+      checkMarkdown = engineResult.rawBase64 !== undefined ? "rawBase64" : "";
+    } else if (
       meta.internalOptions.teamId === "sitemap" ||
       meta.internalOptions.teamId === "robots-txt"
     ) {
@@ -613,6 +641,9 @@ async function scrapeURLLoopIter(
       (engineResult.statusCode >= 200 && engineResult.statusCode < 300) ||
       engineResult.statusCode === 304;
     const hasNoPageError = engineResult.error === undefined;
+    const hasRequiredOutput = hasRawBase64
+      ? engineResult.rawBase64 !== undefined
+      : isLongEnough || !isGoodStatusCode;
     const isLikelyProxyError = [401, 403, 429].includes(
       engineResult.statusCode,
     );
@@ -638,7 +669,7 @@ async function scrapeURLLoopIter(
     // NOTE: TODO: what to do when status code is bad is tough...
     // we cannot just rely on text because error messages can be brief and not hit the limit
     // should we just use all the fallbacks and pick the one with the longest text? - mogery
-    if (isLongEnough || !isGoodStatusCode) {
+    if (hasRequiredOutput) {
       meta.logger.info("Scrape via " + engine + " deemed successful.", {
         factors: { isLongEnough, isGoodStatusCode, hasNoPageError },
       });
@@ -678,37 +709,20 @@ async function scrapeURLLoop(meta: Meta): Promise<ScrapeUrlResponse> {
       "engine.features": Array.from(meta.featureFlags).join(","),
     });
 
-    if (meta.internalOptions.zeroDataRetention) {
-      if (meta.featureFlags.has("screenshot")) {
-        throw new ZDRViolationError("screenshot");
-      }
-
-      if (meta.featureFlags.has("screenshot@fullScreen")) {
-        throw new ZDRViolationError("screenshot@fullScreen");
-      }
-
-      if (
-        meta.options.actions &&
-        meta.options.actions.find(x => x.type === "screenshot")
-      ) {
-        throw new ZDRViolationError("screenshot action");
-      }
-
-      if (
-        meta.options.actions &&
-        meta.options.actions.find(x => x.type === "pdf")
-      ) {
-        throw new ZDRViolationError("pdf action");
-      }
-    }
-
     // TODO: handle sitemap data, see WebScraper/index.ts:280
     // TODO: ScrapeEvents
 
     const fallbackList = await buildFallbackList(meta);
 
-    // Check if actions are requested but no engines support them
-    if (meta.featureFlags.has("actions")) {
+    // Check if actions are requested but no engines support them.
+    // Skip when the content was already prefetched (a browser engine already
+    // ran the actions and downloaded the file); the re-run only needs the
+    // document/pdf engine to parse it, which does not support actions.
+    if (
+      meta.featureFlags.has("actions") &&
+      meta.pdfPrefetch === undefined &&
+      meta.documentPrefetch === undefined
+    ) {
       if (
         fallbackList.length === 0 ||
         fallbackList.every(engine => engine.unsupportedFeatures.has("actions"))
@@ -849,6 +863,15 @@ async function scrapeURLLoop(meta: Meta): Promise<ScrapeUrlResponse> {
                   error: error.error,
                 },
               );
+            } else if (error.error instanceof EngineUnsuccessfulError) {
+              // Deliberately silent. An engine declining the page is a normal
+              // waterfall outcome and is already recorded elsewhere: the
+              // success-factor check logs "deemed unsuccessful" with its reasoning,
+              // and engines that recognise the body as none of their business
+              // (pdf/document finding HTML) are preceded by "Scraping via X...".
+              // Logging again only duplicated that, ~48k lines/hour across all
+              // engines. Recognised here purely so it doesn't fall through to the
+              // catch-all branch and get reported as an unexpected error.
             } else if (
               error.error instanceof AddFeatureError ||
               error.error instanceof RemoveFeatureError ||
@@ -978,6 +1001,7 @@ async function scrapeURLLoop(meta: Meta): Promise<ScrapeUrlResponse> {
 
     for (const postprocessor of postprocessors) {
       if (
+        !hasFormatOfType(meta.options.formats, "rawBase64") &&
         postprocessor.shouldRun(
           meta,
           new URL(engineResult.url),
@@ -1008,7 +1032,10 @@ async function scrapeURLLoop(meta: Meta): Promise<ScrapeUrlResponse> {
 
     let document: Document = {
       markdown: engineResult.markdown,
+      pages: engineResult.pages,
+      blocks: engineResult.blocks,
       rawHtml: engineResult.html,
+      rawBase64: engineResult.rawBase64,
       json: engineResult.json,
       screenshot: engineResult.screenshot,
       actions: engineResult.actions,
@@ -1073,7 +1100,7 @@ async function scrapeURLLoop(meta: Meta): Promise<ScrapeUrlResponse> {
       success: true,
       document,
       unsupportedFeatures: result.unsupportedFeatures,
-      dataLayer: engineResult.dataLayer,
+      exchange: engineResult.exchange,
     };
   });
 }
@@ -1416,6 +1443,27 @@ export async function scrapeURL(
       // if (Object.values(meta.results).length > 0 && Object.values(meta.results).every(x => x.state === "error" && x.error instanceof FEPageLoadFailed)) {
       //   throw new FEPageLoadFailed();
       // } else
+      // A timed-out large-PDF scrape leaves its fire-pdf job running by
+      // design (fire-pdf/async.ts cancel policy); upgrade the timeout
+      // error IN PLACE so the caller learns processing continues and
+      // when a retry of the same URL picks the result up. Covers both
+      // the engine race's own timer and the abort manager's inner
+      // timeout, which exits through the early rethrow below.
+      const timeoutCandidate =
+        error instanceof AbortManagerThrownError ? error.inner : error;
+      if (
+        meta.largePdfProcessing?.current &&
+        timeoutCandidate instanceof ScrapeJobTimeoutError &&
+        timeoutCandidate.processing === undefined
+      ) {
+        const composed = composeTimeoutProcessing({
+          ...meta.largePdfProcessing.current,
+          nowMs: Date.now(),
+        });
+        timeoutCandidate.processing = composed.details;
+        timeoutCandidate.message = composed.message;
+      }
+
       meta.logger.debug("scrapeURL metrics", {
         module: "scrapeURL/metrics",
         timeTaken: Date.now() - startTime,

@@ -9,7 +9,9 @@ use Firecrawl\Version;
 use Firecrawl\Exceptions\JobTimeoutException;
 use Firecrawl\Models\AgentOptions;
 use Firecrawl\Models\AgentResponse;
+use Firecrawl\Models\AgentSnapshotResponse;
 use Firecrawl\Models\AgentStatusResponse;
+use Firecrawl\Models\AgentTraceResponse;
 use Firecrawl\Models\BatchScrapeJob;
 use Firecrawl\Models\BatchScrapeOptions;
 use Firecrawl\Models\BatchScrapeResponse;
@@ -112,7 +114,7 @@ final class FirecrawlClient
         }
         $body['origin'] ??= 'php-sdk@' . Version::SDK_VERSION;
 
-        $response = $this->http->post('/v2/scrape', $body);
+        $response = $this->assertSuccess($this->http->post('/v2/scrape', $body));
 
         return Document::fromArray($response['data'] ?? $response);
     }
@@ -259,22 +261,34 @@ final class FirecrawlClient
     /**
      * Start an async crawl job and return immediately.
      */
-    public function startCrawl(string $url, ?CrawlOptions $options = null): CrawlResponse
-    {
+    public function startCrawl(
+        string $url,
+        ?CrawlOptions $options = null,
+        ?float $requestTimeoutSeconds = null,
+    ): CrawlResponse {
         $body = ['url' => $url];
+        $extraHeaders = [];
+
         if ($options !== null) {
+            $idempotencyKey = $options->getIdempotencyKey();
+            if ($idempotencyKey !== null && $idempotencyKey !== '') {
+                $extraHeaders['x-idempotency-key'] = $idempotencyKey;
+            }
+
             $body = array_merge($body, $options->toArray());
         }
 
-        return CrawlResponse::fromArray($this->http->post('/v2/crawl', $body));
+        return CrawlResponse::fromArray(
+            $this->http->post('/v2/crawl', $body, $extraHeaders, $requestTimeoutSeconds),
+        );
     }
 
     /**
      * Get the status and results of a crawl job.
      */
-    public function getCrawlStatus(string $jobId): CrawlJob
+    public function getCrawlStatus(string $jobId, ?float $requestTimeoutSeconds = null): CrawlJob
     {
-        return CrawlJob::fromArray($this->http->get("/v2/crawl/{$jobId}"));
+        return CrawlJob::fromArray($this->http->get("/v2/crawl/{$jobId}", $requestTimeoutSeconds));
     }
 
     /**
@@ -387,7 +401,7 @@ final class FirecrawlClient
             $body = array_merge($body, $options->toArray());
         }
 
-        $response = $this->http->post('/v2/map', $body);
+        $response = $this->assertSuccess($this->http->post('/v2/map', $body));
 
         return MapData::fromArray($response['data'] ?? $response);
     }
@@ -554,7 +568,7 @@ final class FirecrawlClient
         }
         $body['origin'] ??= 'php-sdk@' . Version::SDK_VERSION;
 
-        $response = $this->http->post('/v2/search', $body);
+        $response = $this->assertSuccess($this->http->post('/v2/search', $body));
 
         return SearchData::fromArray($response['data'] ?? $response);
     }
@@ -619,6 +633,31 @@ final class FirecrawlClient
     public function cancelAgent(string $jobId): array
     {
         return $this->http->delete("/v2/agent/{$jobId}");
+    }
+
+    /**
+     * Get the execution trace of an agent task.
+     *
+     * When $liveView is true, the response also carries the run's currently
+     * active browser sessions with live view URLs.
+     */
+    public function getAgentTrace(string $jobId, bool $liveView = false): AgentTraceResponse
+    {
+        return AgentTraceResponse::fromArray(
+            $this->http->get("/v2/agent/{$jobId}/trace" . $this->query([
+                'liveView' => $liveView ? 'true' : null,
+            ])),
+        );
+    }
+
+    /**
+     * Get a snapshot of an artifact produced by an agent task.
+     */
+    public function getAgentSnapshot(string $jobId, string $snapshotId): AgentSnapshotResponse
+    {
+        return AgentSnapshotResponse::fromArray(
+            $this->http->get("/v2/agent/{$jobId}/snapshots/{$snapshotId}"),
+        );
     }
 
     // ================================================================
@@ -727,6 +766,32 @@ final class FirecrawlClient
         if ($pollIntervalSec < 1) {
             throw new FirecrawlException('Poll interval must be at least 1 second, got ' . $pollIntervalSec);
         }
+    }
+
+    /**
+     * The API reports some failures (e.g. DNS resolution errors) as HTTP 200
+     * with a `success: false` body; the flag, not the status code, is the
+     * error signal for those.
+     *
+     * Only the synchronous endpoints (scrape, search, map) run this check.
+     * Async crawl responses skip it deliberately: a failed start yields a
+     * null job ID that callers guard (pollCrawl() throws on it), and status
+     * polling exposes `status` explicitly on CrawlJob.
+     *
+     * @param array<string, mixed> $response
+     * @return array<string, mixed> the same response, if it does not signal failure
+     */
+    private function assertSuccess(array $response): array
+    {
+        if (($response['success'] ?? null) === false) {
+            $error = $response['error'] ?? null;
+
+            throw new FirecrawlException(is_string($error) && $error !== ''
+                ? $error
+                : 'The API reported the request as unsuccessful.');
+        }
+
+        return $response;
     }
 
     /**

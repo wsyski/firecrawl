@@ -8,6 +8,7 @@ import {
 } from "./types";
 import { logger as _logger } from "../../lib/logger";
 import { logRequest } from "../../services/logging/log_job";
+import { externalRequestId } from "../../lib/external-request-id";
 import { config } from "../../config";
 import { agentConsumeFreeRequestIfLeft } from "../../db/rpc";
 import { getScrapeZDR } from "../../lib/zdr-helpers";
@@ -18,6 +19,7 @@ import {
 import { UnsafeDomainBlockedError } from "../../lib/threat-protection/error";
 import { calculateThreatScanCredits } from "../../lib/scrape-billing";
 import { billTeam } from "../../services/billing/credit_billing";
+import { emitRejectedScrapeActivityEvents } from "../../lib/siem-logging";
 
 export async function agentController(
   req: RequestWithAuth<{}, AgentResponse, AgentRequest>,
@@ -49,7 +51,6 @@ export async function agentController(
   _logger.info("Agent starting...", {
     request: req.body,
     originalRequest,
-    subId: req.acuc?.sub_id,
     zeroDataRetention: getScrapeZDR(req.acuc?.flags) === "forced",
   });
 
@@ -87,10 +88,9 @@ export async function agentController(
       if (threatScanCredits > 0) {
         billTeam(
           req.auth.team_id,
-          req.acuc?.sub_id ?? undefined,
           threatScanCredits,
           req.acuc?.api_key_id ?? null,
-          { endpoint: "agent", jobId: agentId },
+          { endpoint: "agent", jobId: agentId, chargeId: `${agentId}:threat` },
         ).catch(error => {
           logger.error(
             `Failed to bill team ${req.auth.team_id} for ${threatScanCredits} threat scan credit(s): ${error}`,
@@ -99,6 +99,25 @@ export async function agentController(
       }
       const first = blocked[0];
       const error = new UnsafeDomainBlockedError(first.url, first.decision);
+      emitRejectedScrapeActivityEvents(
+        blocked.map(blockedUrl => ({
+          scrapeId: uuidv7(),
+          requestId: agentId,
+          endpoint: "agent",
+          teamId: req.auth.team_id,
+          apiKeyId: req.acuc?.api_key_id ?? null,
+          auditMetadata: req.body.auditMetadata,
+          url: blockedUrl.url,
+          error: new UnsafeDomainBlockedError(
+            blockedUrl.url,
+            blockedUrl.decision,
+          ),
+          threatDecisions: [blockedUrl.decision],
+          origin: req.body.origin ?? "api",
+          integration: req.body.integration,
+          zeroDataRetention: false,
+        })),
+      );
       return res.status(403).json({
         success: false,
         code: error.code,
@@ -131,6 +150,7 @@ export async function agentController(
     id: agentId,
     kind: "agent",
     api_version: "v2",
+    external_request_id: externalRequestId(req),
     team_id: req.auth.team_id,
     origin: req.body.origin ?? "api",
     integration: req.body.integration,
@@ -160,6 +180,8 @@ export async function agentController(
         strictConstrainToURLs: req.body.strictConstrainToURLs ?? undefined,
         webhook: req.body.webhook ?? undefined,
         model: req.body.model,
+        effort: req.body.effort,
+        auditMetadata: req.body.auditMetadata,
       }),
     },
   );

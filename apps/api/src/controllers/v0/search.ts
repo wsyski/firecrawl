@@ -4,6 +4,7 @@ import { autumnService } from "../../services/autumn/autumn.service";
 import { authenticateUser } from "../auth";
 import { RateLimiterMode, ScrapeJobSingleUrls } from "../../types";
 import { logSearch, logRequest } from "../../services/logging/log_job";
+import { externalRequestId } from "../../lib/external-request-id";
 import { PageOptions, SearchOptions } from "../../lib/entities";
 import { search } from "../../search";
 import { isUrlBlocked } from "../../scraper/WebScraper/utils/blocklist";
@@ -33,11 +34,11 @@ async function searchHelper(
   jobId: string,
   req: Request,
   team_id: string,
-  subscription_id: string | null | undefined,
   crawlerOptions: any,
   pageOptions: PageOptions,
   searchOptions: SearchOptions,
   flags: TeamFlags,
+  org_id: string | null,
   api_key_id: number | null,
 ): Promise<{
   success: boolean;
@@ -82,15 +83,15 @@ async function searchHelper(
     crawlerOptions,
     team_id,
   );
+  internalOptions.orgId = org_id;
 
   if (justSearch) {
     const searchCredits = Math.ceil(res.length / 10) * 2;
     billTeam(
       team_id,
-      subscription_id,
       searchCredits,
       api_key_id,
-      { endpoint: "search", jobId },
+      { endpoint: "search", jobId, chargeId: jobId },
       logger,
     ).catch(error => {
       logger.error(
@@ -105,6 +106,7 @@ async function searchHelper(
     r =>
       !isUrlBlocked(r.url, flags, {
         team_id,
+        org_id,
         origin: req.body?.origin ?? null,
       }),
   );
@@ -208,6 +210,7 @@ export async function searchController(req: Request, res: Response) {
       id: jobId,
       kind: "search",
       api_version: "v0",
+      external_request_id: externalRequestId(req),
       team_id,
       origin: req.body.origin ?? "api",
       integration: req.body.integration,
@@ -267,11 +270,11 @@ export async function searchController(req: Request, res: Response) {
       jobId,
       req,
       team_id,
-      chunk?.sub_id,
       crawlerOptions,
       pageOptions,
       searchOptions,
       chunk?.flags ?? null,
+      chunk?.org_id ?? null,
       chunk?.api_key_id ?? null,
     );
     const endTime = new Date().getTime();

@@ -30,6 +30,7 @@ const browserCookieSchema = z
 export type FireEngineScrapeRequestCommon = {
   url: string;
   scrapeId?: string;
+  format?: "html" | "rawBase64";
 
   headers?: { [K: string]: string };
 
@@ -49,6 +50,7 @@ export type FireEngineScrapeRequestCommon = {
   geolocation?: { country?: string; languages?: string[] };
 
   mobileProxy?: boolean; // leave it undefined if user doesn't specify
+  autoProxy?: boolean;
 
   timeout?: number;
   maxAge?: number;
@@ -59,8 +61,13 @@ export type FireEngineScrapeRequestCommon = {
 export type FireEngineScrapeRequestChromeCDP = {
   engine: "chrome-cdp";
   skipTlsVerification?: boolean;
+  /** Team-scoped ceiling (bytes) for fire-engine's large-PDF GCS handoff.
+   * Absent = fire-engine grants no raise and PDFs keep its inline cap. */
+  pdfMaxSize?: number;
   actions?: InternalAction[];
   blockMedia?: boolean;
+  /** Opt out of render-engine routing (blockMedia: false normally forces it). */
+  forceNonRender?: boolean;
   mobile?: boolean;
   disableSmartWaitCache?: boolean;
   persistentStorage?: { uniqueId: string };
@@ -269,10 +276,11 @@ export async function fireEngineScrape<
       );
     } else if (
       typeof status.error === "string" &&
-      (status.error.includes("File size exceeds") ||
-        status.error.includes("File exceeds size limit"))
+      status.error.includes("File exceeds size limit")
     ) {
-      throw new UnsupportedFileError("File exceeds size limit");
+      throw new UnsupportedFileError(
+        status.error.slice(status.error.indexOf("File exceeds size limit")),
+      );
     } else if (
       typeof status.error === "string" &&
       status.error.includes("failed to finish without timing out")

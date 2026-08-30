@@ -1,4 +1,5 @@
 import { Response } from "express";
+import { externalRequestId } from "../../lib/external-request-id";
 import { config } from "../../config";
 import {
   RequestWithAuth,
@@ -8,13 +9,17 @@ import {
 } from "./types";
 import { billTeam } from "../../services/billing/credit_billing";
 import {
-  KEYLESS_FREE_TIER_LIMIT_MESSAGE,
   adjustKeylessCredits,
+  keylessLimitBody,
   logKeylessCreditUsage,
   reserveKeylessCredits,
 } from "../../lib/keyless";
 import { v7 as uuidv7 } from "uuid";
-import { logSearch, logRequest } from "../../services/logging/log_job";
+import {
+  logSearch,
+  logRequest,
+  logResearchEndpoint,
+} from "../../services/logging/log_job";
 import { logger as _logger } from "../../lib/logger";
 import { ScrapeJobTimeoutError } from "../../lib/error";
 import { z } from "zod";
@@ -31,9 +36,13 @@ import { applyAgentAuthDiscoveryHeader } from "../../lib/agent-auth-discovery";
 import { resolveThreatProtection } from "../../lib/threat-protection/request";
 import {
   actionTypesOf,
+  checkKeyEndpointRestriction,
   checkKeyFormatRestriction,
   formatTypesOf,
 } from "../../lib/key-restriction";
+import { wantsDeveloperCategory } from "../../search/developer";
+import { requestOrigin } from "../../lib/request-origin";
+import { isAgentInteropSecretValid } from "../../lib/agent-interop";
 
 export async function searchController(
   req: RequestWithAuth<{}, SearchResponse, SearchRequest>,
@@ -65,6 +74,8 @@ export async function searchController(
   let reconciledKeylessCredits = false;
 
   try {
+    const rawOrigin =
+      typeof req.body?.origin === "string" ? req.body.origin : undefined;
     req.body = searchRequestSchema.parse(req.body);
 
     const requestedFormats = formatTypesOf(req.body.scrapeOptions?.formats);
@@ -85,10 +96,24 @@ export async function searchController(
       });
     }
 
+    if (wantsDeveloperCategory(req.body.categories as CategoryOption[])) {
+      const developerRestriction = await checkKeyEndpointRestriction(
+        "/v2/developer/search",
+        req.acuc?.api_key_id,
+        req.acuc?.flags ?? null,
+      );
+      if (!developerRestriction.allowed) {
+        return res.status(developerRestriction.status).json({
+          success: false,
+          error: developerRestriction.error,
+        });
+      }
+    }
+
     if (
       req.body.__agentInterop &&
       config.AGENT_INTEROP_SECRET &&
-      req.body.__agentInterop.auth !== config.AGENT_INTEROP_SECRET
+      !isAgentInteropSecretValid(req.body.__agentInterop.auth)
     ) {
       return res.status(403).json({
         success: false,
@@ -157,11 +182,17 @@ export async function searchController(
       }
     }
 
+    // Kick off the `requests` row insert without blocking: it queues on the
+    // Postgres pool and can take seconds under pool pressure. We only need it
+    // committed before the child-row writes (logSearch et al. below) to keep
+    // the request_id FK ordering — same pattern as the scrape controllers.
+    let logRequestPromise: Promise<void> | undefined;
     if (!agentRequestId) {
-      await logRequest({
+      logRequestPromise = logRequest({
         id: jobId,
         kind: "search",
         api_version: "v2",
+        external_request_id: externalRequestId(req),
         team_id: req.auth.team_id,
         origin: req.body.origin ?? "api",
         integration: req.body.integration,
@@ -190,10 +221,9 @@ export async function searchController(
       );
       if (!reservation.ok) {
         applyAgentAuthDiscoveryHeader(res);
-        return res.status(429).json({
-          success: false,
-          error: KEYLESS_FREE_TIER_LIMIT_MESSAGE,
-        });
+        return res
+          .status(429)
+          .json(await keylessLimitBody(req.auth.team_id, "v2_search"));
       }
       reservedKeylessCredits = projectedKeylessCredits;
     }
@@ -207,6 +237,7 @@ export async function searchController(
         lang: req.body.lang,
         country: req.body.country,
         location: req.body.location,
+        safe: req.body.safe,
         sources: req.body.sources as Array<{ type: string }>,
         categories: req.body.categories as CategoryOption[],
         includeDomains: req.body.includeDomains,
@@ -218,7 +249,9 @@ export async function searchController(
       },
       {
         teamId: req.auth.team_id,
+        orgId: req.acuc?.org_id ?? null,
         origin: req.body.origin,
+        integration: req.body.integration,
         apiKeyId: req.acuc?.api_key_id ?? null,
         flags: req.acuc?.flags ?? null,
         requestId: agentRequestId ?? jobId,
@@ -238,14 +271,15 @@ export async function searchController(
     if (!isSearchPreview && shouldBill) {
       billTeam(
         req.auth.team_id,
-        req.acuc?.sub_id ?? undefined,
         result.searchCredits,
         req.acuc?.api_key_id ?? null,
-        billing,
+        { ...billing, chargeId: jobId },
       ).catch(error =>
-        logger.error(
-          `Failed to bill team ${req.acuc?.sub_id} for ${result.searchCredits} credits: ${error}`,
-        ),
+        logger.error("Failed to bill team for search credits", {
+          teamId: req.auth.team_id,
+          searchCredits: result.searchCredits,
+          error,
+        }),
       );
     }
 
@@ -263,6 +297,12 @@ export async function searchController(
     const endTime = new Date().getTime();
     const timeTakenInSeconds = (endTime - middlewareStartTime) / 1000;
 
+    // Ensure the parent `requests` row is committed before the child
+    // `searches` insert, to avoid a request_id FK violation. The insert has
+    // been in flight since the top of the controller, so this is ~free in
+    // practice; robustInsert never rejects, so this await cannot throw.
+    await logRequestPromise;
+
     logSearch(
       {
         id: jobId,
@@ -275,11 +315,42 @@ export async function searchController(
         time_taken: timeTakenInSeconds,
         team_id: req.auth.team_id,
         options: req.body,
-        credits_cost: shouldBill ? result.searchCredits : 0,
+        // Don't record preview tokens as billed in the ledger — only record
+        // credits when billing is actually applied.
+        credits_cost: !isSearchPreview && shouldBill ? result.searchCredits : 0,
         zeroDataRetention,
       },
       false,
     );
+
+    if (wantsDeveloperCategory(req.body.categories as CategoryOption[])) {
+      logResearchEndpoint({
+        table: "code_searches",
+        id: uuidv7(),
+        request_id: agentRequestId ?? jobId,
+        team_id: req.auth.team_id,
+        target: req.body.query,
+        options: {
+          origin: requestOrigin({ origin: rawOrigin }, req),
+          integration: req.body.integration ?? null,
+          api_version: "v2",
+          categories: req.body.categories,
+          via: "search_category",
+        },
+        response: null,
+        num_results: result.developerResultsCount,
+        time_taken: timeTakenInSeconds,
+        // Ensure preview-mode searches don't get a non-zero credits_cost
+        // in the research ledger when preview tokens are used.
+        credits_cost: !isSearchPreview && shouldBill ? result.searchCredits : 0,
+        is_successful: true,
+        zeroDataRetention,
+      }).catch(ledgerError => {
+        logger.warn("Failed to log developer category usage", {
+          error: ledgerError,
+        });
+      });
+    }
 
     const totalRequestTime = new Date().getTime() - middlewareStartTime;
     const controllerTime = new Date().getTime() - controllerStartTime;

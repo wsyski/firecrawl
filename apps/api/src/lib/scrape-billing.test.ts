@@ -4,20 +4,25 @@ import {
 } from "./scrape-billing";
 import { UnsafeDomainBlockedError } from "./threat-protection/error";
 import type { ThreatDecision } from "./threat-protection/types";
+import {
+  DNSResolutionError,
+  LockdownMissError,
+} from "../scraper/scrapeURL/error";
 
 describe("calculateCreditsToBeBilled", () => {
-  it("bills handled data layer successes at 15 credits", async () => {
+  it("bills handled Exchange successes at the reported credit cost", async () => {
     const credits = await calculateCreditsToBeBilled(
       {
         formats: [{ type: "markdown" }],
       } as any,
       {
         teamId: "team-id",
+        orgId: null,
       },
       {
         metadata: {
           statusCode: 200,
-          url: "https://profiles.example/in/example-person",
+          url: "https://profiles.example/person/example-person",
           proxyUsed: "basic",
         },
       } as any,
@@ -27,10 +32,10 @@ describe("calculateCreditsToBeBilled", () => {
       {} as any,
       undefined,
       undefined,
-      { handled: true },
+      { handled: true, creditsCost: 12 },
     );
 
-    expect(credits).toBe(15);
+    expect(credits).toBe(12);
   });
 
   it("bills X/Twitter scrapes at 30 credits", async () => {
@@ -40,6 +45,7 @@ describe("calculateCreditsToBeBilled", () => {
       } as any,
       {
         teamId: "team-id",
+        orgId: null,
       },
       {
         metadata: {
@@ -57,6 +63,61 @@ describe("calculateCreditsToBeBilled", () => {
     expect(credits).toBe(30);
   });
 
+  it("bills enhanced proxy scrapes the same as basic ones", async () => {
+    const bill = (unsupportedFeatures?: Set<any>) =>
+      calculateCreditsToBeBilled(
+        {
+          formats: [{ type: "markdown" }],
+        } as any,
+        {
+          teamId: "team-id",
+          orgId: null,
+        },
+        {
+          metadata: {
+            statusCode: 200,
+            proxyUsed: "stealth",
+          },
+        } as any,
+        {
+          totalCost: 0,
+        } as any,
+        {} as any,
+        undefined,
+        unsupportedFeatures,
+      );
+
+    // No surcharge, whether or not the engine could honour Enhanced Mode (the
+    // old waiver for an unsupported enhanced proxy is moot now there is
+    // nothing to waive).
+    expect(await bill()).toBe(1);
+    expect(await bill(new Set(["stealthProxy"]))).toBe(1);
+  });
+
+  it("still bills enhanced proxy scrapes with json at 5 credits", async () => {
+    const credits = await calculateCreditsToBeBilled(
+      {
+        formats: [{ type: "json", schema: {} }],
+      } as any,
+      {
+        teamId: "team-id",
+        orgId: null,
+      },
+      {
+        metadata: {
+          statusCode: 200,
+          proxyUsed: "stealth",
+        },
+      } as any,
+      {
+        totalCost: 0,
+      } as any,
+      {} as any,
+    );
+
+    expect(credits).toBe(5);
+  });
+
   it("bills deterministic JSON at 10 credits when the script was generated", async () => {
     const credits = await calculateCreditsToBeBilled(
       {
@@ -64,6 +125,7 @@ describe("calculateCreditsToBeBilled", () => {
       } as any,
       {
         teamId: "team-id",
+        orgId: null,
       },
       {
         metadata: {
@@ -88,6 +150,46 @@ describe("calculateCreditsToBeBilled", () => {
     expect(credits).toBe(10);
   });
 
+  it("bills nothing for DNS resolution failures", async () => {
+    const credits = await calculateCreditsToBeBilled(
+      {
+        formats: [{ type: "markdown" }],
+      } as any,
+      {
+        teamId: "team-id",
+        orgId: null,
+      },
+      null,
+      {
+        totalCost: 0,
+      } as any,
+      {} as any,
+      new DNSResolutionError("nonexistent.example.com"),
+    );
+
+    expect(credits).toBe(0);
+  });
+
+  it("bills 1 credit for lockdown cache misses", async () => {
+    const credits = await calculateCreditsToBeBilled(
+      {
+        formats: [{ type: "markdown" }],
+      } as any,
+      {
+        teamId: "team-id",
+        orgId: null,
+      },
+      null,
+      {
+        totalCost: 0,
+      } as any,
+      {} as any,
+      new LockdownMissError(),
+    );
+
+    expect(credits).toBe(1);
+  });
+
   it("bills deterministic JSON at 3 credits when a cached script was reused", async () => {
     const credits = await calculateCreditsToBeBilled(
       {
@@ -95,6 +197,7 @@ describe("calculateCreditsToBeBilled", () => {
       } as any,
       {
         teamId: "team-id",
+        orgId: null,
       },
       {
         metadata: {
@@ -163,7 +266,7 @@ const billWithDecisions = (args: {
 }) =>
   calculateCreditsToBeBilled(
     { formats: [{ type: "markdown" }] } as any,
-    { teamId: "team-id" },
+    { teamId: "team-id", orgId: null },
     args.document as any,
     { totalCost: 0 } as any,
     {} as any,
@@ -239,6 +342,28 @@ describe("calculateThreatScanCredits", () => {
         localOnly("provider-failure", false),
       ]),
     ).toBe(0);
+  });
+
+  it("never bills zscaler-mode decisions, consulted or not", () => {
+    const zscalerConsulted: ThreatDecision = {
+      ...consulted(false),
+      mode: "zscaler",
+      verdict: {
+        provider: "zscaler-zia",
+        riskScore: null,
+        categories: ["GAMBLING"],
+        fromCache: false,
+        raw: {},
+      },
+    };
+    expect(calculateThreatScanCredits([zscalerConsulted])).toBe(0);
+    // Mixed with a billable normal-mode decision, only that one bills.
+    expect(
+      calculateThreatScanCredits([
+        zscalerConsulted,
+        consulted(true, "http://a.example/"),
+      ]),
+    ).toBe(2);
   });
 
   it("sums mixed decisions across URLs", () => {
