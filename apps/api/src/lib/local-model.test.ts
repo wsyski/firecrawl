@@ -59,6 +59,7 @@ describe("localModelFetch", () => {
     __resetLocalModelCacheForTests();
     vi.restoreAllMocks();
     config.MODEL_NAME = "fallback-model";
+    config.LLM_DISABLE_THINKING = undefined;
   });
 
   it("rewrites the request to the model the server has loaded", async () => {
@@ -125,5 +126,44 @@ describe("localModelFetch", () => {
     const fetchMock = stubFetch("model-b");
     await localModelFetch(CHAT_URL, { method: "GET" });
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("injects enable_thinking=false on chat bodies when LLM_DISABLE_THINKING", async () => {
+    config.LLM_DISABLE_THINKING = true;
+    const fetchMock = stubFetch("model-b");
+    await chat({ model: "gpt-4o-mini", messages: [{ role: "user" }] });
+    const sent = JSON.parse(chatCall(fetchMock)[1].body);
+    expect(sent.chat_template_kwargs).toEqual({ enable_thinking: false });
+    expect(sent.model).toBe("model-b");
+  });
+
+  it("lets a caller-provided enable_thinking win", async () => {
+    config.LLM_DISABLE_THINKING = true;
+    const fetchMock = stubFetch("model-b");
+    await chat({
+      model: "gpt-4o-mini",
+      messages: [{ role: "user" }],
+      chat_template_kwargs: { enable_thinking: true },
+    });
+    expect(
+      JSON.parse(chatCall(fetchMock)[1].body).chat_template_kwargs,
+    ).toEqual({ enable_thinking: true });
+  });
+
+  it("does not touch non-chat bodies even when LLM_DISABLE_THINKING", async () => {
+    config.LLM_DISABLE_THINKING = true;
+    const fetchMock = stubFetch("model-b");
+    await localModelFetch("http://llama-swap.test:8081/v1/embeddings", {
+      method: "POST",
+      body: JSON.stringify({ input: "x" }),
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves chat bodies untouched when LLM_DISABLE_THINKING is unset", async () => {
+    const fetchMock = stubFetch("model-b");
+    await chat({ model: "model-b", messages: [{ role: "user" }] });
+    const sent = JSON.parse(chatCall(fetchMock)[1].body);
+    expect(sent.chat_template_kwargs).toBeUndefined();
   });
 });

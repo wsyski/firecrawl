@@ -54,16 +54,35 @@ async function currentModelId(): Promise<string | undefined> {
 // exactly when the swap happens.
 export const localModelFetch: typeof fetch = async (input, init) => {
   if (typeof init?.body !== "string") return fetch(input, init);
-  let body: { model?: unknown };
+  let body: {
+    model?: unknown;
+    messages?: unknown;
+    chat_template_kwargs?: Record<string, unknown>;
+  };
   try {
     body = JSON.parse(init.body);
   } catch {
     return fetch(input, init);
   }
-  if (typeof body.model !== "string") return fetch(input, init);
+  const isChat = Array.isArray(body.messages);
+  const disableThinking = isChat && config.LLM_DISABLE_THINKING === true;
+  if (typeof body.model !== "string" && !disableThinking)
+    return fetch(input, init);
   const model = (await currentModelId()) ?? body.model;
-  if (model === body.model) return fetch(input, init);
-  return fetch(input, { ...init, body: JSON.stringify({ ...body, model }) });
+  const next: Record<string, unknown> = { ...body };
+  if (typeof model === "string" && model !== body.model) next.model = model;
+  // Thinking models (e.g. Qwen/ornith-1.5 templates) can spend the whole
+  // budget on reasoning_content, leaving `content` empty. Only chat bodies;
+  // a caller-provided value wins.
+  if (disableThinking) {
+    next.chat_template_kwargs = {
+      ...body.chat_template_kwargs,
+      enable_thinking: body.chat_template_kwargs?.enable_thinking ?? false,
+    };
+  }
+  if (next.model === body.model && next.chat_template_kwargs === body.chat_template_kwargs)
+    return fetch(input, init);
+  return fetch(input, { ...init, body: JSON.stringify(next) });
 };
 
 export function __resetLocalModelCacheForTests(): void {
