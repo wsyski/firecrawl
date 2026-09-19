@@ -35,7 +35,13 @@ import {
   calculateBrowserSessionCredits,
 } from "../../lib/browser-billing";
 import { autumnService } from "../../services/autumn/autumn.service";
+import { orgIdForTeam } from "../../lib/team-org";
 import { isAgentInteropSecretValid } from "../../lib/agent-interop";
+import { recordRequestCredits } from "../../lib/request-credits-store";
+import {
+  getSafeMode,
+  SAFE_MODE_BROWSER_UNSUPPORTED_MESSAGE,
+} from "../../lib/safe-mode";
 
 // ---------------------------------------------------------------------------
 // Zod schemas
@@ -225,6 +231,13 @@ export async function browserCreateController(
 
   req.body = browserCreateRequestSchema.parse(req.body);
 
+  if (getSafeMode(req.acuc?.flags)) {
+    return res.status(403).json({
+      success: false,
+      error: SAFE_MODE_BROWSER_UNSUPPORTED_MESSAGE,
+    });
+  }
+
   if (
     req.body.__agentInterop &&
     config.AGENT_INTEROP_SECRET &&
@@ -266,15 +279,21 @@ export async function browserCreateController(
   // 0a. Check if team has enough credits for the full TTL
   if (shouldBill) {
     const estimatedCredits = calculateBrowserSessionCredits(ttl * 1000);
-    const autumnResult = await autumnService.checkCredits({
-      teamId: req.auth.team_id,
-      value: estimatedCredits,
-      properties: {
-        source: "browserCreate",
-        path: req.path,
-        apiKeyId: req.acuc?.api_key_id ?? null,
-      },
-    });
+    // No org, no Autumn customer to gate against: fail open, exactly as
+    // checkCredits answered for an identity it could not name.
+    const orgId = req.acuc?.org_id ?? null;
+    const autumnResult = orgId
+      ? await autumnService.checkCredits({
+          teamId: req.auth.team_id,
+          orgId,
+          value: estimatedCredits,
+          properties: {
+            source: "browserCreate",
+            path: req.path,
+            apiKeyId: req.acuc?.api_key_id ?? null,
+          },
+        })
+      : null;
 
     if (autumnResult !== null && !autumnResult.allowed) {
       logger.warn("Insufficient credits for browser session TTL", {
@@ -291,7 +310,7 @@ export async function browserCreateController(
   // 0b. Enforce concurrency limit (shared pool with scrape/crawl/interact)
   const concurrencyLimit = await getEffectiveConcurrencyLimit(
     req.auth.team_id,
-    req.acuc?.org_id,
+    req.acuc?.org_id ?? null,
   );
   const activeCount = await getCombinedTeamActiveCount(req.auth.team_id);
   if (activeCount >= concurrencyLimit) {
@@ -463,6 +482,13 @@ export async function browserExecuteController(
   // }
 
   req.body = browserExecuteRequestSchema.parse(req.body);
+
+  if (getSafeMode(req.acuc?.flags)) {
+    return res.status(403).json({
+      success: false,
+      error: SAFE_MODE_BROWSER_UNSUPPORTED_MESSAGE,
+    });
+  }
 
   const id = req.params.sessionId;
   const { code, language, timeout, origin } = req.body;
@@ -661,25 +687,50 @@ export async function browserDeleteController(
 
   await updateBrowserSessionCreditsUsed(session.id, creditsBilled);
 
+  const agentRequestId =
+    session.request_id && session.request_id !== session.id
+      ? session.request_id
+      : null;
   if (session.should_bill) {
-    const agentRequestId =
-      session.request_id && session.request_id !== session.id
-        ? session.request_id
-        : null;
-    billTeam(req.auth.team_id, creditsBilled, req.acuc?.api_key_id ?? null, {
-      endpoint: agentRequestId ? "agent" : usedPrompt ? "interact" : "browser",
-      jobId: agentRequestId ?? session.id,
-      // Keyed on the session rather than on jobId, deliberately: one agent
-      // request can drive several sessions, and each is its own charge — a key
-      // built from the shared agent id would collapse them into one. The
-      // per-path suffix guards the other direction: the webhook teardown below
-      // bills the same session through a different path.
-      chargeId: `${session.id}:destroy`,
-    }).catch(error => {
+    billTeam(
+      req.auth.team_id,
+      req.acuc?.org_id ?? null,
+      creditsBilled,
+      req.acuc?.api_key_id ?? null,
+      {
+        endpoint: agentRequestId
+          ? "agent"
+          : usedPrompt
+            ? "interact"
+            : "browser",
+        jobId: agentRequestId ?? session.id,
+        // Keyed on the session rather than on jobId, deliberately: one agent
+        // request can drive several sessions, and each is its own charge — a key
+        // built from the shared agent id would collapse them into one. The
+        // per-path suffix guards the other direction: the webhook teardown below
+        // bills the same session through a different path.
+        chargeId: `${session.id}:destroy`,
+      },
+    ).catch(error => {
       logger.error("Failed to bill team for browser session", {
         error,
         creditsBilled,
         durationMs,
+      });
+    });
+  }
+
+  if (agentRequestId) {
+    await recordRequestCredits({
+      requestId: agentRequestId,
+      jobId: session.id,
+      credits: creditsBilled,
+    }).catch(error => {
+      logger.error("Failed to record browser request credits in Bigtable", {
+        error,
+        requestId: agentRequestId,
+        sessionId: session.id,
+        creditsBilled,
       });
     });
   }
@@ -819,25 +870,52 @@ export async function browserWebhookDestroyedController(
 
   await updateBrowserSessionCreditsUsed(session.id, creditsBilled);
 
+  const agentRequestId =
+    session.request_id && session.request_id !== session.id
+      ? session.request_id
+      : null;
   if (session.should_bill) {
-    const agentRequestId =
-      session.request_id && session.request_id !== session.id
-        ? session.request_id
-        : null;
-    billTeam(session.team_id, creditsBilled, null, {
-      endpoint: agentRequestId ? "agent" : usedPrompt ? "interact" : "browser",
-      jobId: agentRequestId ?? session.id,
-      // Same reasoning as the destroy path above: keyed on the session, not on
-      // jobId, and suffixed per path so the two teardown routes cannot dedupe
-      // each other's charge away.
-      chargeId: `${session.id}:webhook`,
-    }).catch(error => {
+    // The webhook carries no request context, so the team's ACUC answers for
+    // the org — the same lookup the biller used to make for itself.
+    billTeam(
+      session.team_id,
+      await orgIdForTeam(session.team_id),
+      creditsBilled,
+      null,
+      {
+        endpoint: agentRequestId
+          ? "agent"
+          : usedPrompt
+            ? "interact"
+            : "browser",
+        jobId: agentRequestId ?? session.id,
+        // Same reasoning as the destroy path above: keyed on the session, not on
+        // jobId, and suffixed per path so the two teardown routes cannot dedupe
+        // each other's charge away.
+        chargeId: `${session.id}:webhook`,
+      },
+    ).catch(error => {
       logger.error("Failed to bill team for browser session via webhook", {
         error,
         teamId: session.team_id,
         sessionId: session.id,
         creditsBilled,
         durationMs,
+      });
+    });
+  }
+
+  if (agentRequestId) {
+    await recordRequestCredits({
+      requestId: agentRequestId,
+      jobId: session.id,
+      credits: creditsBilled,
+    }).catch(error => {
+      logger.error("Failed to record browser request credits in Bigtable", {
+        error,
+        requestId: agentRequestId,
+        sessionId: session.id,
+        creditsBilled,
       });
     });
   }

@@ -7,7 +7,9 @@ import {
   FireEngineScrapeRequestChromeCDP,
   FireEngineScrapeRequestCommon,
   FireEngineScrapeRequestTLSClient,
+  safeModeParams,
 } from "./scrape";
+import { stripCredentialHeaders } from "../../../../lib/safe-mode";
 import { EngineScrapeResult } from "..";
 import {
   fireEngineCheckStatus,
@@ -20,12 +22,12 @@ import {
   EngineError,
   DNSResolutionError,
   SiteError,
+  SiteRestrictionError,
   SSLError,
   UnsupportedFileError,
   FEPageLoadFailed,
   ProxySelectionError,
 } from "../../error";
-import * as Sentry from "@sentry/node";
 import { gunzipSync } from "node:zlib";
 import { specialtyScrapeCheck } from "../utils/specialtyHandler";
 import {
@@ -153,6 +155,7 @@ async function performFireEngineScrape<
           } else if (
             error instanceof EngineError ||
             error instanceof SiteError ||
+            error instanceof SiteRestrictionError ||
             error instanceof SSLError ||
             error instanceof DNSResolutionError ||
             error instanceof ActionError ||
@@ -202,7 +205,6 @@ async function performFireEngineScrape<
               `An unexpeceted error occurred while calling checkStatus. Error counter is now at ${errors.length}.`,
               { error, jobId: (scrape as any).jobId },
             );
-            Sentry.captureException(error);
           }
         }
 
@@ -492,7 +494,19 @@ export async function scrapeURLWithFireEngineChromeCDP(
             uniqueId: `${createHash("sha256").update(meta.internalOptions.teamId).digest("hex").slice(0, 16)}_${meta.options.profile.name}`,
           }
         : undefined,
+      ...safeModeParams(meta.internalOptions.safeMode),
     };
+
+    // Safe Mode worker-side hardening: neutralize anything that request-time
+    // enforcement would reject but that inherited scrape options can still carry.
+    const sm = meta.internalOptions.safeMode;
+    if (sm?.disableStealthProxy) {
+      request.mobileProxy = false;
+    }
+    if (sm?.disableAuthentication) {
+      request.persistentStorage = undefined;
+      request.headers = stripCredentialHeaders(request.headers);
+    }
 
     let response = await performFireEngineScrape(
       meta,
@@ -644,7 +658,16 @@ export async function scrapeURLWithFireEngineTLSClient(
         !meta.internalOptions.zeroDataRetention &&
         meta.internalOptions.saveScrapeResultToGCS,
       zeroDataRetention: meta.internalOptions.zeroDataRetention,
+      ...safeModeParams(meta.internalOptions.safeMode),
     };
+
+    const sm = meta.internalOptions.safeMode;
+    if (sm?.disableStealthProxy) {
+      request.mobileProxy = false;
+    }
+    if (sm?.disableAuthentication) {
+      request.headers = stripCredentialHeaders(request.headers);
+    }
 
     let response = await performFireEngineScrape(
       meta,

@@ -1,8 +1,6 @@
 import "dotenv/config";
 import { config } from "../../config";
-import "../sentry";
-import { setSentryServiceTag } from "../sentry";
-import * as Sentry from "@sentry/node";
+import { shutdownTracing } from "../../otel";
 import { Job, Queue, Worker } from "bullmq";
 import { logger as _logger, logger } from "../../lib/logger";
 import {
@@ -44,6 +42,7 @@ import { processEngpickerJob } from "../../lib/engpicker";
 import { logRequest, shutdownPubSubLogging } from "../logging/log_job";
 import { startSiemLoggingConsumer } from "../siem-logging/worker";
 import { closeSiemLoggingTransport } from "../../lib/siem-logging/transport";
+import { requestCreditsShards } from "../../lib/request-credits-store";
 
 const workerLockDuration = config.WORKER_LOCK_DURATION;
 const workerStalledCheckInterval = config.WORKER_STALLED_CHECK_INTERVAL;
@@ -84,6 +83,9 @@ const processBillingJobInternal = async (token: string, job: Job) => {
       // This is an individual billing operation that should be queued for batch processing
       const {
         team_id,
+        // Undefined on a job enqueued before the producer carried the org;
+        // passed through as such so the batch resolves it once instead.
+        org_id,
         credits,
         billing,
         endpoint,
@@ -102,6 +104,7 @@ const processBillingJobInternal = async (token: string, job: Job) => {
       // Add to the REDIS batch queue
       await queueBillingOperation(
         team_id,
+        org_id,
         credits,
         api_key_id ?? null,
         resolveBillingMetadata({
@@ -125,7 +128,6 @@ const processBillingJobInternal = async (token: string, job: Job) => {
     await job.moveToCompleted({ success: true }, token, false);
   } catch (error) {
     logger.error("Error processing billing job", { error });
-    Sentry.captureException(error);
     err = error;
     await job.moveToFailed(error, token, false);
   } finally {
@@ -484,6 +486,7 @@ const processPrecrawlJob = async (token: string, job: Job) => {
               target_hint: url,
               zeroDataRetention: false,
               api_key_id: null,
+              creditsShards: requestCreditsShards(limit),
             });
 
             const crawlerOptions = {
@@ -555,7 +558,6 @@ const processPrecrawlJob = async (token: string, job: Job) => {
             submittedCrawls++;
           } catch (e) {
             logger.error("Error adding precrawl job to queue", { error: e });
-            Sentry.captureException(e);
           }
         }
 
@@ -580,7 +582,6 @@ const processPrecrawlJob = async (token: string, job: Job) => {
     });
   } catch (e) {
     logger.error("Error processing precrawl job", { error: e });
-    Sentry.captureException(e);
     await job.moveToFailed(e, token, false);
   } finally {
     clearInterval(extendLockInterval);
@@ -687,6 +688,7 @@ const workerFun = async (
   }
   logger.info("All jobs finished. Worker exiting!");
   await shutdownPubSubLogging();
+  await shutdownTracing();
   process.exit(0);
 };
 
@@ -699,8 +701,6 @@ const BROWSER_ACTIVITY_INSERT_INTERVAL = 10000;
 
 // Start the workers
 (async () => {
-  setSentryServiceTag("index-worker");
-
   // Start billing worker and batch processing
   startBillingBatchProcessing();
   const billingWorkerPromise = workerFun(

@@ -219,6 +219,7 @@ const configSchema = z.object({
   REDIS_URL: z.string().optional(),
   REDIS_EVICT_URL: z.string().optional(),
   REDIS_RATE_LIMIT_URL: z.string().optional(),
+  SPUR_REDIS_URL: z.string().optional(),
   NUQ_DATABASE_URL: z.string().optional(),
   NUQ_DATABASE_URL_LISTEN: z.string().optional(),
   NUQ_RABBITMQ_URL: z.string().optional(),
@@ -250,8 +251,27 @@ const configSchema = z.object({
 
   // Google Cloud Pub/Sub
   PUBSUB_CREDENTIALS: z.string().optional(),
+  // Prepended to every log topic name. Production leaves it unset and
+  // publishes to `<table>`; staging sets `staging-` so its rows land in the
+  // `staging-<table>` topics and the staging ClickHouse database instead of
+  // the production tables.
+  PUBSUB_TOPIC_PREFIX: z.string().default(""),
+  // Publisher backlog cap, per process. Log publishing is fire-and-forget and
+  // retries for up to five minutes, so during a stall the backlog is what
+  // grows; rows beyond the cap are dropped and counted rather than letting a
+  // hung channel take the process down.
+  PUBSUB_MAX_OUTSTANDING_MESSAGES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(10_000),
+  PUBSUB_MAX_OUTSTANDING_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(64 * 1024 * 1024),
 
-  // Cloud Bigtable (change tracking bookkeeping store). The client
+  // Cloud Bigtable operational stores. The client
   // auto-detects BIGTABLE_EMULATOR_HOST, so local dev only needs the
   // emulator plus these vars. BIGTABLE_CREDENTIALS mirrors
   // GCS_CREDENTIALS: base64-encoded service-account JSON; unset falls
@@ -260,6 +280,11 @@ const configSchema = z.object({
   BIGTABLE_INSTANCE_ID: z.string().optional(),
   BIGTABLE_APP_PROFILE_ID: z.string().optional(),
   BIGTABLE_CHANGE_TRACKING_TABLE: z.string().optional(),
+  BIGTABLE_JOB_ACCESS_TABLE: z.string().optional(),
+  BIGTABLE_FEEDBACK_JOBS_TABLE: z.string().optional(),
+  BIGTABLE_SCRAPE_STATE_TABLE: z.string().optional(),
+  BIGTABLE_EXTRACT_STATE_TABLE: z.string().optional(),
+  BIGTABLE_REQUEST_CREDITS_TABLE: z.string().optional(),
   BIGTABLE_CREDENTIALS: z.string().optional(),
 
   // ClickHouse (Search Analytics)
@@ -276,6 +301,7 @@ const configSchema = z.object({
 
   // Exchange (routed data sources service)
   FIRE_EXCHANGE_URL: z.url().optional(),
+  EXCHANGE_INTERNAL_SECRET: emptyStringAsUndefined(z.string().trim().min(1)),
 
   // Fire Engine
   FIRE_ENGINE_BETA_URL: z.string().optional(),
@@ -362,6 +388,13 @@ const configSchema = z.object({
   FIRE_PDF_PERCENT: z.coerce.number().min(0).max(100).default(10),
   FIRE_PDF_BASE_URL: z.string().optional(),
   FIRE_PDF_API_KEY: z.string().optional(),
+  // `parsers: [{ type: "pdf", refresh: true }]` skips the content cache and
+  // forces a fresh parse. Per team, per minute; beyond the budget the
+  // request is served normally. 0 disables the option.
+  FIRE_PDF_CACHE_REFRESH_PER_MINUTE: z.coerce.number().int().min(0).default(10),
+  // Raster image OCR of image URLs and parse uploads through FirePDF (see
+  // lib/image-ocr-gate.ts). Needs FIRE_PDF_BASE_URL.
+  IMAGE_OCR_ENABLED: z.stringbool().default(false),
   // Async /jobs rollout is a separate, server-controlled cohort inside
   // traffic already selected for FirePDF. It is disabled by default.
   FIRE_PDF_ASYNC_PERCENT: z.coerce.number().min(0).max(100).default(0),
@@ -499,11 +532,15 @@ const configSchema = z.object({
   SYS_INFO_MAX_CACHE_DURATION: z.coerce.number().default(150),
   USE_GO_MARKDOWN_PARSER: z.stringbool().optional(),
 
-  // Sentry
-  SENTRY_DSN: z.string().optional(),
-  SENTRY_TRACE_SAMPLE_RATE: z.coerce.number().default(0.01),
-  SENTRY_ERROR_SAMPLE_RATE: z.coerce.number().default(0.05),
   SENTRY_ENVIRONMENT: z.string().default("production"),
+
+  // OpenTelemetry. Tracing is off unless an OTLP endpoint is set; spans are then
+  // exported over http/protobuf at 100% sampling, and the SDK honors the
+  // standard OTEL_EXPORTER_OTLP_* / OTEL_BSP_* / OTEL_RESOURCE_ATTRIBUTES
+  // variables. Zero-data-retention spans are never exported (see otel-tracer).
+  OTEL_EXPORTER_OTLP_ENDPOINT: emptyStringAsUndefined(z.string().url()),
+  OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: emptyStringAsUndefined(z.string().url()),
+  OTEL_SERVICE_NAME: emptyStringAsUndefined(z.string()),
   NUQ_POD_NAME: z.string().default("main"),
 
   // Billing
@@ -543,7 +580,7 @@ const configSchema = z.object({
   DISABLE_ENGPICKER: z.stringbool().optional(),
   DISABLE_MONITORING: z.stringbool().default(false),
 
-  EXTRACT_V3_BETA_URL: z.string().optional(),
+  EXTRACT_V3_BETA_URL: z.string().url().optional(),
   AGENT_INTEROP_SECRET: z
     .string()
     .refine(value => value.trim().length > 0, {
@@ -579,6 +616,8 @@ const configSchema = z.object({
   NUQ_PREFETCH_WORKER_HEARTBEAT_URL: z.string().optional(),
 
   ZDRCLEANER_HEARTBEAT_URL: z.string().optional(),
+
+  CCLOG_WORKER_HEARTBEAT_URL: z.string().optional(),
 
   // Deterministic JSON extraction (reusable-json-mode)
   EXTRACT_CODEGEN_MODEL: z.string().default("gemini-3.1-flash-lite"),

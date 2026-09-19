@@ -2,11 +2,11 @@ import { db } from "../../db/connection";
 import * as schema from "../../db/schema";
 import { changeTrackingInsertScrape } from "../../lib/change-tracking-store";
 import { config } from "../../config";
+import { enqueueZdrCleanupJob } from "../../lib/zdr-queue";
 import "dotenv/config";
 import { logger as _logger } from "../../lib/logger";
 import { EXTERNAL_REQUEST_ID_MAX_BYTES } from "../../lib/external-request-id";
 import { configDotenv } from "dotenv";
-import * as Sentry from "@sentry/node";
 import type { PgTable } from "drizzle-orm/pg-core";
 import {
   saveDeepResearchToGCS,
@@ -23,21 +23,98 @@ import type { CostTracking } from "../../lib/cost-tracking";
 import type { Logger } from "winston";
 import { saveExtractResult } from "../../lib/extract/extract-redis";
 import { trackFirstSurfaceUse } from "../posthog";
-import { PubSub, type Topic } from "@google-cloud/pubsub";
+import { PubSub, type PublishOptions, type Topic } from "@google-cloud/pubsub";
+import { pubsubLogPublishTotal } from "../../lib/pubsub-log-metrics";
+import { sanitizeLogData, sanitizeText } from "./sanitize";
+import {
+  isApiJobKind,
+  normalizeJobAccessTeamId,
+  writeApiJobAccess,
+} from "../../lib/job-access-store";
+import { writeFeedbackJob } from "../../lib/feedback-job-store";
+import { setSpanAttributes, withSpan } from "../../lib/otel-tracer";
+import {
+  writeExtractJobState,
+  writeScrapeJobState,
+} from "../../lib/job-state-store";
+import { buildReplayContextFromScrape } from "../../lib/scrape-interact/scrape-replay";
+import {
+  initializeRequestCredits,
+  recordRequestCredits,
+} from "../../lib/request-credits-store";
 configDotenv();
 
 const previewTeamId = "3adefd26-77ec-5968-8dcf-c94b5630d1de";
-const nullByteRegex = /\u0000/g;
+const DEFAULT_JOB_ACCESS_TTL_MS = 24 * 60 * 60 * 1000;
+
+async function withLogSpan<T>(
+  params: {
+    operation: string;
+    table: string;
+    id: string;
+    requestId?: string;
+    force?: boolean;
+    zeroDataRetention?: boolean;
+  },
+  fn: () => Promise<T>,
+): Promise<T> {
+  return withSpan(
+    `log_job.${params.operation}`,
+    async span => {
+      setSpanAttributes(span, {
+        "log_job.table": params.table,
+        "log_job.id": params.id,
+        "log_job.request_id": params.requestId,
+        "log_job.force": params.force,
+      });
+      return fn();
+    },
+    { zeroDataRetention: params.zeroDataRetention },
+  );
+}
+
+async function writeFeedbackJobSafely(
+  params: Parameters<typeof writeFeedbackJob>[0],
+  logger: Logger,
+): Promise<void> {
+  try {
+    await writeFeedbackJob(params);
+  } catch (error) {
+    logger.error("Failed to write feedback job to Bigtable", {
+      error,
+      jobId: params.jobId,
+      endpoint: params.endpoint,
+    });
+  }
+}
+
+async function recordRequestCreditsSafely(
+  params: Parameters<typeof recordRequestCredits>[0],
+  logger: Logger,
+): Promise<void> {
+  try {
+    await recordRequestCredits(params);
+  } catch (error) {
+    logger.error("Failed to record request credits in Bigtable", {
+      error,
+      requestId: params.requestId,
+      jobId: params.jobId,
+      credits: params.credits,
+    });
+  }
+}
 
 /**
- * Sanitize string fields by removing null bytes (\u0000)
- * PostgreSQL doesn't allow null bytes in text fields
- * This can come from user-provided data like URLs, origin, integration fields
+ * Null-aware wrapper around the shared text sanitizer, kept where a cleaned
+ * value feeds a later decision (the external_request_id byte cap). Every row
+ * is deep-sanitized again in robustInsert before it reaches either store, so
+ * nothing else depends on this being called; see ./sanitize.ts for what gets
+ * cleaned and why.
  */
 function sanitizeString(value: string | null | undefined): string | null {
   if (value === null || value === undefined) return null;
 
-  return value.replace(nullByteRegex, "");
+  return sanitizeText(value);
 }
 
 const tableMap: Record<string, PgTable> = {
@@ -62,7 +139,47 @@ const tableMap: Record<string, PgTable> = {
 let pubSubClient: PubSub | null | undefined;
 const pubSubTopics = new Map<string, Topic>();
 let pubSubShutdown: Promise<void> | undefined;
-const PUBSUB_PUBLISH_TIMEOUT_MS = 60_000;
+
+// Publish retry policy. Passing only `timeout` makes google-gax collapse the
+// whole retry budget to that one value (CallSettings.merge), so a stalled RPC
+// used to be a single 60 s attempt and then a lost row. An explicit `retry`
+// is applied after that override and replaces the backoff settings wholesale.
+// Short attempts detect a stalled RPC quickly. The total budget allows
+// retries across a longer connection disruption.
+// Retry codes stay the client's defaults for Publish (DEADLINE_EXCEEDED,
+// UNAVAILABLE, INTERNAL, UNKNOWN, ABORTED, CANCELLED, RESOURCE_EXHAUSTED).
+// A retry can deliver a batch twice when the first attempt was persisted but
+// its response was lost; the ClickHouse tables dedupe on row id, not message
+// id, so those copies collapse.
+const PUBSUB_PUBLISH_OPTIONS: PublishOptions = {
+  gaxOpts: {
+    retry: {
+      backoffSettings: {
+        initialRetryDelayMillis: 250,
+        retryDelayMultiplier: 2,
+        maxRetryDelayMillis: 15_000,
+        initialRpcTimeoutMillis: 15_000,
+        rpcTimeoutMultiplier: 1,
+        maxRpcTimeoutMillis: 15_000,
+        totalTimeoutMillis: 300_000,
+      },
+    },
+  },
+};
+
+// Shutdown waits this long for in-flight publishes before closing the client.
+// The drain shares the existing pod grace period with active work and exit.
+// Memory kills and work that exceeds the pod grace period can still lose logs.
+const PUBSUB_SHUTDOWN_FLUSH_TIMEOUT_MS = 40_000;
+
+// Track publication promises because topic.flush() can finish before an active RPC.
+const pendingPublications = new Map<
+  Promise<string>,
+  { table: string; logId: string; startedAt: number }
+>();
+let outstandingBytes = 0;
+let droppedTotal = 0;
+let lastDropWarningAt = 0;
 
 function getPubSubClient(logger: Logger): PubSub | null {
   if (pubSubClient !== undefined) return pubSubClient;
@@ -79,37 +196,101 @@ function getPubSubClient(logger: Logger): PubSub | null {
   } catch (error) {
     pubSubClient = null;
     logger.error("Failed to initialize Pub/Sub log publisher", { error });
-    Sentry.captureException(error, {
-      tags: { operation: "initializePubSubLogPublisher" },
-    });
     return null;
   }
 }
 
-// One Topic per table so publishes share a batch.
+// One Topic per table so publishes share a batch. The topic is named after
+// the table, behind the optional environment prefix (see PUBSUB_TOPIC_PREFIX).
 function getTopic(client: PubSub, table: string): Topic {
-  let topic = pubSubTopics.get(table);
+  const name = `${config.PUBSUB_TOPIC_PREFIX}${table}`;
+  let topic = pubSubTopics.get(name);
   if (!topic) {
-    topic = client.topic(table, {
-      gaxOpts: { timeout: PUBSUB_PUBLISH_TIMEOUT_MS },
-    });
-    pubSubTopics.set(table, topic);
+    topic = client.topic(name, PUBSUB_PUBLISH_OPTIONS);
+    pubSubTopics.set(name, topic);
   }
   return topic;
 }
 
 async function publishLog(table: string, data: any, logger: Logger) {
-  const client = getPubSubClient(logger);
-  if (!client) return;
-
+  const startedAt = Date.now();
   try {
-    await getTopic(client, table).publishMessage({
-      data: Buffer.from(JSON.stringify(data)),
+    await withSpan("log_job.pubsub.publish", async span => {
+      setSpanAttributes(span, {
+        "log_job.table": table,
+        "log_job.id": data.id,
+        "messaging.system": "gcp_pubsub",
+      });
+
+      if (pubSubShutdown) {
+        throw new Error("Pub/Sub log publisher is shutting down");
+      }
+      const client = getPubSubClient(logger);
+      if (!client) {
+        if (config.PUBSUB_CREDENTIALS) {
+          throw new Error("Pub/Sub log publisher initialization failed");
+        }
+        setSpanAttributes(span, {
+          "log_job.pubsub.enabled": false,
+          "log_job.pubsub.outcome": "skipped",
+        });
+        return;
+      }
+
+      const payload = Buffer.from(JSON.stringify(data));
+      setSpanAttributes(span, {
+        "log_job.pubsub.enabled": true,
+        "log_job.pubsub.payload_bytes": payload.length,
+      });
+      if (
+        pendingPublications.size >= config.PUBSUB_MAX_OUTSTANDING_MESSAGES ||
+        outstandingBytes + payload.length > config.PUBSUB_MAX_OUTSTANDING_BYTES
+      ) {
+        droppedTotal++;
+        pubsubLogPublishTotal.inc({ table, outcome: "dropped" });
+        setSpanAttributes(span, { "log_job.pubsub.outcome": "dropped" });
+        const now = Date.now();
+        if (now - lastDropWarningAt >= 60_000) {
+          lastDropWarningAt = now;
+          logger.warn("Dropping Pub/Sub log: publisher backlog is full", {
+            table,
+            logId: data.id,
+            payloadBytes: payload.length,
+            outstandingMessages: pendingPublications.size,
+            outstandingBytes,
+            droppedTotal,
+          });
+        }
+        return;
+      }
+
+      const publication = getTopic(client, table).publishMessage({
+        data: payload,
+      });
+      pendingPublications.set(publication, {
+        table,
+        logId: data.id,
+        startedAt,
+      });
+      outstandingBytes += payload.length;
+
+      try {
+        await publication;
+        pubsubLogPublishTotal.inc({ table, outcome: "published" });
+        setSpanAttributes(span, { "log_job.pubsub.outcome": "published" });
+      } finally {
+        pendingPublications.delete(publication);
+        outstandingBytes -= payload.length;
+      }
     });
   } catch (error) {
-    logger.error("Failed to publish log to Pub/Sub", { error });
-    Sentry.captureException(error, {
-      tags: { table, operation: "publishPubSubLog" },
+    pubsubLogPublishTotal.inc({ table, outcome: "failed" });
+
+    logger.error("Failed to publish log to Pub/Sub", {
+      error,
+      table,
+      logId: data.id,
+      durationMs: Date.now() - startedAt,
     });
   }
 }
@@ -129,28 +310,68 @@ async function shutdownPubSubLoggingOnce(): Promise<void> {
     module: "log_job",
     method: "shutdownPubSubLogging",
   });
-  const results = await Promise.allSettled(
-    [...pubSubTopics.values()].map(topic => topic.flush()),
-  );
-  const errors = results.flatMap(result =>
-    result.status === "rejected" ? [result.reason] : [],
-  );
+  const startedAt = Date.now();
+  logger.info("Draining Pub/Sub log publisher", {
+    outstandingMessages: pendingPublications.size,
+    outstandingBytes,
+    timeoutMs: PUBSUB_SHUTDOWN_FLUSH_TIMEOUT_MS,
+  });
+  // Callers stop accepting work before shutdown. Reject new publications so
+  // this snapshot includes every publication that can still use the client.
+  const flushed = Promise.allSettled([
+    ...[...pubSubTopics.values()].map(async topic => topic.flush()),
+    ...pendingPublications.keys(),
+  ]);
+  let deadline: NodeJS.Timeout | undefined;
+  const timedOut = new Promise<"timeout">(resolve => {
+    deadline = setTimeout(
+      () => resolve("timeout"),
+      PUBSUB_SHUTDOWN_FLUSH_TIMEOUT_MS,
+    );
+  });
+  const results = await Promise.race([flushed, timedOut]);
+  clearTimeout(deadline);
 
-  if (errors.length > 0) {
-    logger.error("Failed to flush Pub/Sub log publisher", { errors });
-    Sentry.captureException(errors[0], {
-      tags: { operation: "flushPubSubLogPublisher" },
-      extra: { failures: errors.length },
-    });
+  if (results === "timeout") {
+    logger.warn(
+      "Pub/Sub log flush did not finish before the shutdown deadline; closing anyway",
+      {
+        timeoutMs: PUBSUB_SHUTDOWN_FLUSH_TIMEOUT_MS,
+        outstandingMessages: pendingPublications.size,
+        outstandingBytes,
+        pendingLogSample: [...pendingPublications.values()].slice(0, 50),
+        pendingLogSampleTruncated: pendingPublications.size > 50,
+      },
+    );
+  } else {
+    const errors = results.flatMap(result =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+
+    if (errors.length > 0) {
+      logger.error("Failed to drain Pub/Sub log publisher", { errors });
+    } else {
+      logger.info("Pub/Sub log publisher drained", {
+        durationMs: Date.now() - startedAt,
+      });
+    }
   }
 
+  let closeDeadline: NodeJS.Timeout | undefined;
   try {
-    await client.close();
+    await Promise.race([
+      client.close(),
+      new Promise<never>((_, reject) => {
+        closeDeadline = setTimeout(
+          () => reject(new Error("Pub/Sub client close exceeded 5 seconds")),
+          5_000,
+        );
+      }),
+    ]);
   } catch (error) {
     logger.error("Failed to close Pub/Sub log publisher", { error });
-    Sentry.captureException(error, {
-      tags: { operation: "closePubSubLogPublisher" },
-    });
+  } finally {
+    clearTimeout(closeDeadline);
   }
 }
 
@@ -167,93 +388,87 @@ async function robustInsert(
     canonicalLog: "log_job/robustInsert",
   });
 
-  if (config.USE_DB_AUTHENTICATION !== true) {
-    logger.info(
-      "Skipping database insertion due to USE_DB_AUTHENTICATION being off",
-    );
-    return;
-  }
-
-  const target = tableMap[table];
-  data = { ...data, created_at: data.created_at ?? new Date() };
-  void publishLog(table, data, logger);
-
   const attempts: { error: any; timeMs: number; backoffMs: number }[] = [];
+  try {
+    const inserted = await withSpan("log_job.postgres.insert", async span => {
+      setSpanAttributes(span, {
+        "db.system": "postgresql",
+        "log_job.table": table,
+        "log_job.id": data.id,
+        "log_job.force": force,
+      });
 
-  if (force) {
-    for (let i = 0; i < 10; i++) {
-      const start = Date.now();
-      try {
-        await db.insert(target).values(data);
-        attempts.push({
-          error: null,
-          timeMs: Date.now() - start,
-          backoffMs: i === 0 ? 0 : 75,
+      if (config.USE_DB_AUTHENTICATION !== true) {
+        logger.info(
+          "Skipping database insertion due to USE_DB_AUTHENTICATION being off",
+        );
+        setSpanAttributes(span, {
+          "log_job.postgres.enabled": false,
+          "log_job.postgres.outcome": "skipped",
         });
-        break;
-      } catch (error) {
-        attempts.push({
-          error,
-          timeMs: Date.now() - start,
-          backoffMs: i === 0 ? 0 : 75,
-        });
-        await new Promise(resolve => setTimeout(resolve, 75));
+        return false;
       }
-    }
 
-    if (attempts.length === 1 && attempts[0].error === null) {
+      setSpanAttributes(span, { "log_job.postgres.enabled": true });
+      const target = tableMap[table];
+      // The single point where a row leaves for both stores: clean it once so
+      // PostgreSQL and ClickHouse receive identical, accepted values.
+      data = sanitizeLogData({
+        ...data,
+        created_at: data.created_at ?? new Date(),
+      });
+      // Publish in the background. Customer responses must not wait for Pub/Sub.
+      void publishLog(table, data, logger);
+
+      const maxAttempts = force ? 10 : 1;
+      for (let i = 0; i < maxAttempts; i++) {
+        const backoffMs = i === 0 ? 0 : 75;
+        const start = Date.now();
+        try {
+          await db.insert(target).values(data);
+          attempts.push({
+            error: null,
+            timeMs: Date.now() - start,
+            backoffMs,
+          });
+          break;
+        } catch (error) {
+          attempts.push({
+            error,
+            timeMs: Date.now() - start,
+            backoffMs,
+          });
+          if (force) {
+            await new Promise(resolve => setTimeout(resolve, 75));
+          }
+        }
+      }
+
+      const lastAttempt = attempts.at(-1);
+      setSpanAttributes(span, {
+        "log_job.postgres.attempts": attempts.length,
+        "log_job.postgres.retries": Math.max(0, attempts.length - 1),
+        "log_job.postgres.outcome":
+          lastAttempt?.error === null ? "inserted" : "failed",
+      });
+      if (lastAttempt?.error !== null) {
+        throw (
+          lastAttempt?.error ?? new Error("Database insert was not attempted")
+        );
+      }
+      return true;
+    });
+
+    if (!inserted) return;
+    if (attempts.length === 1) {
       logger.debug("Inserted into database successfully", { attempts });
-    } else if (
-      attempts.length > 1 &&
-      attempts[attempts.length - 1].error === null
-    ) {
+    } else {
       logger.warn("Inserted into database successfully with retries", {
         attempts,
       });
-    } else {
-      logger.error("Failed to insert into database", { attempts });
-      // Report to Sentry with context
-      Sentry.captureException(
-        attempts[attempts.length - 1]?.error ||
-          new Error("Database insert failed after 10 attempts"),
-        {
-          tags: {
-            table,
-            operation: "robustInsert",
-          },
-          extra: {
-            table,
-            data: JSON.stringify(data).substring(0, 500), // Limit size
-            attempts: 10,
-            lastError: attempts[attempts.length - 1]?.error
-              ? JSON.stringify(attempts[attempts.length - 1].error)
-              : null,
-          },
-        },
-      );
     }
-  } else {
-    const start = Date.now();
-    try {
-      await db.insert(target).values(data);
-      attempts.push({ error: null, timeMs: Date.now() - start, backoffMs: 0 });
-      logger.debug("Inserted into database successfully", { attempts });
-    } catch (error) {
-      attempts.push({ error, timeMs: Date.now() - start, backoffMs: 0 });
-      logger.error("Failed to insert into database", { attempts });
-      // Report to Sentry
-      Sentry.captureException(error, {
-        tags: {
-          table,
-          operation: "robustInsert",
-          force: "false",
-        },
-        extra: {
-          table,
-          data: JSON.stringify(data).substring(0, 500), // Limit size
-        },
-      });
-    }
+  } catch {
+    logger.error("Failed to insert into database", { attempts });
   }
 }
 
@@ -291,6 +506,9 @@ type LoggedRequest = {
    * and read back off this row by the request id.
    */
   external_request_id?: string | null;
+  jobAccess?: boolean;
+  jobAccessExpiresAt?: Date;
+  creditsShards?: number;
 };
 
 /**
@@ -321,6 +539,18 @@ function boundedExternalRequestId(
 }
 
 export async function logRequest(request: LoggedRequest) {
+  return withLogSpan(
+    {
+      operation: "request",
+      table: "requests",
+      id: request.id,
+      zeroDataRetention: request.zeroDataRetention,
+    },
+    () => logRequestInternal(request),
+  );
+}
+
+async function logRequestInternal(request: LoggedRequest) {
   const logger = _logger.child({
     module: "log_job",
     method: "logRequest",
@@ -349,6 +579,46 @@ export async function logRequest(request: LoggedRequest) {
   const sanitizedTargetHint = request.zeroDataRetention
     ? "<redacted due to zero data retention>"
     : sanitizeString(request.target_hint);
+  const storedTeamId =
+    request.team_id === "preview" || request.team_id?.startsWith("preview_")
+      ? previewTeamId
+      : request.team_id;
+  const jobAccessTeamId = normalizeJobAccessTeamId(request.team_id);
+
+  if (request.jobAccess !== false && isApiJobKind(request.kind)) {
+    try {
+      await writeApiJobAccess({
+        id: request.id,
+        teamId: jobAccessTeamId,
+        kind: request.kind,
+        expiresAt:
+          request.jobAccessExpiresAt ??
+          new Date(Date.now() + DEFAULT_JOB_ACCESS_TTL_MS),
+        clientOrigin: sanitizedOrigin,
+        zeroDataRetention: request.zeroDataRetention,
+      });
+    } catch (error) {
+      logger.error("Failed to write API job access to Bigtable", {
+        error,
+        kind: request.kind,
+      });
+    }
+  }
+
+  if (request.creditsShards !== undefined) {
+    try {
+      await initializeRequestCredits(request.id, request.creditsShards);
+    } catch (error) {
+      logger.error("Failed to initialize request credits in Bigtable", {
+        error,
+        shards: request.creditsShards,
+      });
+    }
+  }
+
+  if (request.zeroDataRetention && config.USE_DB_AUTHENTICATION === true) {
+    await enqueueZdrCleanupJob(request.id);
+  }
 
   await robustInsert(
     "requests",
@@ -356,20 +626,14 @@ export async function logRequest(request: LoggedRequest) {
       id: request.id,
       kind: request.kind,
       api_version: request.api_version,
-      team_id:
-        request.team_id === "preview" || request.team_id?.startsWith("preview_")
-          ? previewTeamId
-          : request.team_id,
+      team_id: storedTeamId,
       origin: sanitizedOrigin,
       integration: sanitizedIntegration,
       target_hint: sanitizedTargetHint,
-      dr_clean_by: request.zeroDataRetention
-        ? new Date(Date.now() + 24 * 60 * 60 * 1000)
-        : null,
       api_key_id: request.api_key_id ?? null,
       // Not redacted under zero data retention: it is the caller's own
       // operation id (attribution it asked for), not customer content — and
-      // the row is cleaned at dr_clean_by regardless.
+      // the row's blobs are cleaned by the ZDR queue regardless.
       external_request_id: boundedExternalRequestId(
         sanitizeString(request.external_request_id ?? null),
         logger,
@@ -399,9 +663,50 @@ export type LoggedScrape = {
   is_parse?: boolean;
   monitor_id?: string | null;
   monitor_check_id?: string | null;
+  /** False for jobs that must not be fetchable by id (defaults to true). */
+  jobAccess?: boolean;
 };
 
-export async function logScrape(scrape: LoggedScrape, force: boolean = false) {
+export type ScrapeStateOutcome =
+  /** The terminal state is readable from Bigtable. */
+  | "written"
+  /** Nothing to write: a parse job, or no state table configured. */
+  | "skipped"
+  /** The Bigtable write threw; the error is logged here. */
+  | "failed";
+
+type LogScrapeHooks = {
+  /**
+   * Called once the terminal state write has settled, before anything else
+   * is logged. The sync scrape path waits on this before answering, so an
+   * interact call that follows the response finds its replay context.
+   */
+  onStateWritten?: (outcome: ScrapeStateOutcome) => void;
+};
+
+export async function logScrape(
+  scrape: LoggedScrape,
+  force: boolean = false,
+  hooks?: LogScrapeHooks,
+) {
+  return withLogSpan(
+    {
+      operation: scrape.is_parse ? "parse" : "scrape",
+      table: scrape.is_parse ? "parses" : "scrapes",
+      id: scrape.id,
+      requestId: scrape.request_id,
+      force,
+      zeroDataRetention: scrape.zeroDataRetention,
+    },
+    () => logScrapeInternal(scrape, force, hooks),
+  );
+}
+
+async function logScrapeInternal(
+  scrape: LoggedScrape,
+  force: boolean = false,
+  hooks?: LogScrapeHooks,
+) {
   const logger = _logger.child({
     module: "log_job",
     method: "logScrape",
@@ -412,6 +717,67 @@ export async function logScrape(scrape: LoggedScrape, force: boolean = false) {
   });
 
   const tableName = scrape.is_parse ? "parses" : "scrapes";
+  const storedTeamId =
+    keylessTeamUuid(scrape.team_id) ??
+    (scrape.team_id === "preview" || scrape.team_id?.startsWith("preview_")
+      ? previewTeamId
+      : scrape.team_id);
+
+  // Terminal state for every scrape job, standalone or child, so status reads
+  // never need the PostgreSQL row. It goes first: the sync scrape response
+  // waits for it, and nothing else here has to be readable that early.
+  let stateOutcome: ScrapeStateOutcome = "skipped";
+  try {
+    if (!scrape.is_parse) {
+      const replay = scrape.zeroDataRetention
+        ? undefined
+        : buildReplayContextFromScrape({
+            id: scrape.id,
+            team_id: storedTeamId,
+            url: scrape.url,
+            options: scrape.options,
+          }).context;
+      const written = await writeScrapeJobState(scrape.id, {
+        status: scrape.is_successful ? "completed" : "failed",
+        requestId: scrape.request_id,
+        completedAtMs: Date.now(),
+        creditsBilled: scrape.credits_cost,
+        ...(scrape.zeroDataRetention
+          ? {}
+          : {
+              ...(scrape.error ? { error: scrape.error } : {}),
+              ...(replay ? { replay } : {}),
+              ...(scrape.options.profile
+                ? { profile: scrape.options.profile }
+                : {}),
+              ...(typeof (scrape.options as any).origin === "string"
+                ? { origin: (scrape.options as any).origin }
+                : {}),
+            }),
+      });
+      stateOutcome = written ? "written" : "skipped";
+    }
+  } catch (error) {
+    stateOutcome = "failed";
+    logger.error("Failed to write scrape state to Bigtable", { error });
+  } finally {
+    hooks?.onStateWritten?.(stateOutcome);
+  }
+
+  const feedbackJob = {
+    jobId: scrape.id,
+    requestId: scrape.request_id,
+    teamId: storedTeamId,
+    succeeded: scrape.is_successful,
+    creditsBilled: scrape.credits_cost,
+    zeroDataRetention: scrape.zeroDataRetention,
+  };
+  await writeFeedbackJobSafely(
+    scrape.is_parse
+      ? { ...feedbackJob, endpoint: "parse" }
+      : { ...feedbackJob, endpoint: "scrape", scrapeOptions: scrape.options },
+    logger,
+  );
 
   await robustInsert(
     tableName,
@@ -424,11 +790,7 @@ export async function logScrape(scrape: LoggedScrape, force: boolean = false) {
       is_successful: scrape.is_successful,
       error: scrape.error ?? null,
       time_taken: scrape.time_taken,
-      team_id:
-        keylessTeamUuid(scrape.team_id) ??
-        (scrape.team_id === "preview" || scrape.team_id?.startsWith("preview_")
-          ? previewTeamId
-          : scrape.team_id),
+      team_id: storedTeamId,
       options: scrape.zeroDataRetention ? null : scrape.options,
       cost_tracking: scrape.zeroDataRetention
         ? null
@@ -448,6 +810,36 @@ export async function logScrape(scrape: LoggedScrape, force: boolean = false) {
     force,
     logger,
   );
+
+  if (scrape.id !== scrape.request_id) {
+    await recordRequestCreditsSafely(
+      {
+        requestId: scrape.request_id,
+        jobId: scrape.id,
+        credits: scrape.credits_cost,
+      },
+      logger,
+    );
+
+    // A crawl or batch child is fetched by its own id (`GET /scrape/{id}`,
+    // typically off the crawl `page` webhook), so it needs its own access row.
+    // Standalone scrapes get theirs from logRequest.
+    if (!scrape.is_parse && scrape.jobAccess !== false) {
+      try {
+        await writeApiJobAccess({
+          id: scrape.id,
+          teamId: normalizeJobAccessTeamId(scrape.team_id),
+          kind: "scrape",
+          expiresAt: new Date(Date.now() + DEFAULT_JOB_ACCESS_TTL_MS),
+          zeroDataRetention: scrape.zeroDataRetention,
+        });
+      } catch (error) {
+        logger.error("Failed to write child scrape job access to Bigtable", {
+          error,
+        });
+      }
+    }
+  }
 
   if (
     !scrape.is_parse &&
@@ -507,6 +899,20 @@ type LoggedCrawl = {
 };
 
 export async function logCrawl(crawl: LoggedCrawl, force: boolean = false) {
+  return withLogSpan(
+    {
+      operation: "crawl",
+      table: "crawls",
+      id: crawl.id,
+      requestId: crawl.request_id,
+      force,
+      zeroDataRetention: crawl.zeroDataRetention,
+    },
+    () => logCrawlInternal(crawl, force),
+  );
+}
+
+async function logCrawlInternal(crawl: LoggedCrawl, force: boolean = false) {
   const logger = _logger.child({
     module: "log_job",
     method: "logCrawl",
@@ -554,6 +960,23 @@ export async function logBatchScrape(
   batchScrape: LoggedBatchScrape,
   force: boolean = false,
 ) {
+  return withLogSpan(
+    {
+      operation: "batch_scrape",
+      table: "batch_scrapes",
+      id: batchScrape.id,
+      requestId: batchScrape.request_id,
+      force,
+      zeroDataRetention: batchScrape.zeroDataRetention,
+    },
+    () => logBatchScrapeInternal(batchScrape, force),
+  );
+}
+
+async function logBatchScrapeInternal(
+  batchScrape: LoggedBatchScrape,
+  force: boolean = false,
+) {
   const logger = _logger.child({
     module: "log_job",
     method: "logBatchScrape",
@@ -598,6 +1021,20 @@ export type LoggedSearch = {
 };
 
 export async function logSearch(search: LoggedSearch, force: boolean = false) {
+  return withLogSpan(
+    {
+      operation: "search",
+      table: "searches",
+      id: search.id,
+      requestId: search.request_id,
+      force,
+      zeroDataRetention: search.zeroDataRetention,
+    },
+    () => logSearchInternal(search, force),
+  );
+}
+
+async function logSearchInternal(search: LoggedSearch, force: boolean = false) {
   const logger = _logger.child({
     module: "log_job",
     method: "logSearch",
@@ -611,6 +1048,23 @@ export async function logSearch(search: LoggedSearch, force: boolean = false) {
     search.zeroDataRetention || typeof search.options?.query !== "string"
       ? search.options
       : { ...search.options, query: sanitizeString(search.options.query) };
+  const storedTeamId =
+    search.team_id === "preview" || search.team_id?.startsWith("preview_")
+      ? previewTeamId
+      : search.team_id;
+
+  await writeFeedbackJobSafely(
+    {
+      jobId: search.id,
+      requestId: search.request_id,
+      teamId: storedTeamId,
+      endpoint: "search",
+      succeeded: search.is_successful,
+      creditsBilled: search.credits_cost,
+      zeroDataRetention: search.zeroDataRetention,
+    },
+    logger,
+  );
 
   await robustInsert(
     "searches",
@@ -620,10 +1074,7 @@ export async function logSearch(search: LoggedSearch, force: boolean = false) {
       query: search.zeroDataRetention
         ? "<redacted due to zero data retention>"
         : sanitizeString(search.query),
-      team_id:
-        search.team_id === "preview" || search.team_id?.startsWith("preview_")
-          ? previewTeamId
-          : search.team_id,
+      team_id: storedTeamId,
       options: search.zeroDataRetention
         ? { enterprise: search.options?.enterprise }
         : options,
@@ -636,6 +1087,17 @@ export async function logSearch(search: LoggedSearch, force: boolean = false) {
     force,
     logger,
   );
+
+  if (search.id !== search.request_id) {
+    await recordRequestCreditsSafely(
+      {
+        requestId: search.request_id,
+        jobId: search.id,
+        credits: search.credits_cost,
+      },
+      logger,
+    );
+  }
 
   if (search.results && !search.zeroDataRetention) {
     await saveSearchToGCS(search, logger);
@@ -675,6 +1137,23 @@ type LoggedResearchEndpoint = {
 };
 
 export async function logResearchEndpoint(
+  research: LoggedResearchEndpoint,
+  force: boolean = false,
+) {
+  return withLogSpan(
+    {
+      operation: "research",
+      table: research.table,
+      id: research.id,
+      requestId: research.request_id,
+      force,
+      zeroDataRetention: research.zeroDataRetention,
+    },
+    () => logResearchEndpointInternal(research, force),
+  );
+}
+
+async function logResearchEndpointInternal(
   research: LoggedResearchEndpoint,
   force: boolean = false,
 ) {
@@ -732,6 +1211,22 @@ export async function logExtract(
   extract: LoggedExtract,
   force: boolean = false,
 ) {
+  return withLogSpan(
+    {
+      operation: "extract",
+      table: "extracts",
+      id: extract.id,
+      requestId: extract.request_id,
+      force,
+    },
+    () => logExtractInternal(extract, force),
+  );
+}
+
+async function logExtractInternal(
+  extract: LoggedExtract,
+  force: boolean = false,
+) {
   const logger = _logger.child({
     module: "log_job",
     method: "logExtract",
@@ -761,6 +1256,17 @@ export async function logExtract(
     logger,
   );
 
+  try {
+    await writeExtractJobState(extract.id, {
+      status: extract.is_successful ? "completed" : "failed",
+      completedAtMs: Date.now(),
+      creditsBilled: extract.credits_cost,
+      ...(extract.error ? { error: extract.error } : {}),
+    });
+  } catch (error) {
+    logger.error("Failed to write extract state to Bigtable", { error });
+  }
+
   if (extract.result) {
     if (config.GCS_BUCKET_NAME) {
       await saveExtractToGCS(extract, logger);
@@ -783,6 +1289,20 @@ export type LoggedMap = {
 };
 
 export async function logMap(map: LoggedMap, force: boolean = false) {
+  return withLogSpan(
+    {
+      operation: "map",
+      table: "maps",
+      id: map.id,
+      requestId: map.request_id,
+      force,
+      zeroDataRetention: map.zeroDataRetention,
+    },
+    () => logMapInternal(map, force),
+  );
+}
+
+async function logMapInternal(map: LoggedMap, force: boolean = false) {
   const logger = _logger.child({
     module: "log_job",
     method: "logMap",
@@ -791,6 +1311,23 @@ export async function logMap(map: LoggedMap, force: boolean = false) {
     teamId: map.team_id,
     zeroDataRetention: map.zeroDataRetention,
   });
+  const storedTeamId =
+    map.team_id === "preview" || map.team_id?.startsWith("preview_")
+      ? previewTeamId
+      : map.team_id;
+
+  await writeFeedbackJobSafely(
+    {
+      jobId: map.id,
+      requestId: map.request_id,
+      teamId: storedTeamId,
+      endpoint: "map",
+      succeeded: true,
+      creditsBilled: map.credits_cost,
+      zeroDataRetention: map.zeroDataRetention,
+    },
+    logger,
+  );
 
   await robustInsert(
     "maps",
@@ -800,10 +1337,7 @@ export async function logMap(map: LoggedMap, force: boolean = false) {
       url: map.zeroDataRetention
         ? "<redacted due to zero data retention>"
         : map.url,
-      team_id:
-        map.team_id === "preview" || map.team_id?.startsWith("preview_")
-          ? previewTeamId
-          : map.team_id,
+      team_id: storedTeamId,
       options: map.zeroDataRetention ? null : map.options,
       num_results: map.results.length,
       credits_cost: map.credits_cost,
@@ -830,6 +1364,22 @@ export type LoggedLlmsTxt = {
 };
 
 export async function logLlmsTxt(
+  llmsTxt: LoggedLlmsTxt,
+  force: boolean = false,
+) {
+  return withLogSpan(
+    {
+      operation: "llmstxt",
+      table: "llmstxts",
+      id: llmsTxt.id,
+      requestId: llmsTxt.request_id,
+      force,
+    },
+    () => logLlmsTxtInternal(llmsTxt, force),
+  );
+}
+
+async function logLlmsTxtInternal(
   llmsTxt: LoggedLlmsTxt,
   force: boolean = false,
 ) {
@@ -878,6 +1428,22 @@ export type LoggedDeepResearch = {
 };
 
 export async function logDeepResearch(
+  deepResearch: LoggedDeepResearch,
+  force: boolean = false,
+) {
+  return withLogSpan(
+    {
+      operation: "deep_research",
+      table: "deep_researches",
+      id: deepResearch.id,
+      requestId: deepResearch.request_id,
+      force,
+    },
+    () => logDeepResearchInternal(deepResearch, force),
+  );
+}
+
+async function logDeepResearchInternal(
   deepResearch: LoggedDeepResearch,
   force: boolean = false,
 ) {

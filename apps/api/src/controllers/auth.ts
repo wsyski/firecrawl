@@ -9,7 +9,9 @@ import {
   getRateLimiter,
   getAutumnRateLimiter,
   getRateLimitOverride,
+  HOBBY_RATE_LIMIT_MULTIPLIER,
 } from "../services/rate-limiter";
+import { isAgentInteropSecretValid } from "../lib/agent-interop";
 import {
   KEYLESS_FREE_TIER_LIMIT_MESSAGE,
   consumeKeylessRequest,
@@ -20,6 +22,7 @@ import {
   normalizeKeylessIpv4,
 } from "../lib/keyless";
 import { isKeylessIpSuspicious } from "../lib/spur";
+import { keylessAuthTotal } from "../lib/keyless-metrics";
 import { checkIpRestriction } from "../lib/ip-restriction";
 import { checkKeyEndpointRestriction } from "../lib/key-restriction";
 import { deleteKey, getValue, setValue } from "../services/redis";
@@ -44,6 +47,7 @@ import {
 import type { OAuthIntrospectionResponse } from "../services/oauth-token-introspection";
 import { verifyMcpDelegatedCredential } from "../lib/mcp-delegated-credential";
 import { autumnService } from "../services/autumn/autumn.service";
+import { ReplyError } from "ioredis";
 
 function normalizedApiIsUuid(potentialUuid: string): boolean {
   // Check if the string is a valid UUID
@@ -84,7 +88,9 @@ async function setCachedACUC(
       await setValue(cacheKeyACUC, JSON.stringify(acuc), 600, true);
     });
   } catch (error) {
-    logger.error(`Error updating cached ACUC ${cacheKeyACUC}: ${error}`);
+    logger.error("Error updating cached ACUC", {
+      error,
+    });
   }
 }
 
@@ -172,18 +178,38 @@ async function getACUC(
   const cacheKeyACUC = `acuc_${credentialPurpose}_${api_key}_${isExtract ? "extract" : "scrape"}`;
 
   if (useCache) {
-    const cachedACUC = await getValue(cacheKeyACUC);
+    let cachedACUC: string | null;
+    try {
+      cachedACUC = await getValue(cacheKeyACUC);
+    } catch (error) {
+      if (
+        error instanceof ReplyError ||
+        (error instanceof Error &&
+          (error as any).address &&
+          (error as any).code &&
+          error.name === "Error") ||
+        (error instanceof Error && error.name === "MaxRetriesPerRequestError")
+      ) {
+        logger.warn(
+          "Reading ACUC out of cache redis failed, treating as miss",
+          {
+            error,
+          },
+        );
+        cachedACUC = null;
+      } else {
+        throw error;
+      }
+    }
     if (cachedACUC !== null) {
       try {
         return JSON.parse(cachedACUC);
       } catch (error) {
         logger.warn("Ignoring malformed ACUC cache entry", {
-          cacheKey: cacheKeyACUC,
           error,
         });
         void deleteKey(cacheKeyACUC).catch(deleteError => {
           logger.warn("Failed to delete malformed ACUC cache entry", {
-            cacheKey: cacheKeyACUC,
             error: deleteError,
           });
         });
@@ -279,7 +305,10 @@ async function setCachedACUCTeam(
       await setValue(cacheKeyACUC, JSON.stringify(acuc), 600, true);
     });
   } catch (error) {
-    logger.error(`Error updating cached ACUC ${cacheKeyACUC}: ${error}`);
+    logger.error("Error updating cached ACUC", {
+      cacheKey: cacheKeyACUC,
+      error,
+    });
   }
 }
 
@@ -308,9 +337,47 @@ export async function getACUCTeam(
   const cacheKeyACUC = `acuc_team_${team_id}_${isExtract ? "extract" : "scrape"}`;
 
   if (useCache) {
-    const cachedACUC = await getValue(cacheKeyACUC);
+    let cachedACUC: string | null;
+    try {
+      cachedACUC = await getValue(cacheKeyACUC);
+    } catch (error) {
+      if (
+        error instanceof ReplyError ||
+        (error instanceof Error &&
+          (error as any).address &&
+          (error as any).code &&
+          error.name === "Error") ||
+        (error instanceof Error && error.name === "MaxRetriesPerRequestError")
+      ) {
+        logger.warn(
+          "Reading ACUC out of cache redis failed, treating as miss",
+          {
+            cacheKey: cacheKeyACUC,
+            error,
+          },
+        );
+        cachedACUC = null;
+      } else {
+        throw error;
+      }
+    }
     if (cachedACUC !== null) {
-      return JSON.parse(cachedACUC);
+      // A corrupt entry is a miss, not a failure: callers that fall back to a
+      // null org on a throw would otherwise take the high fail-open limits.
+      try {
+        return JSON.parse(cachedACUC);
+      } catch (error) {
+        logger.warn("Ignoring malformed ACUC cache entry", {
+          cacheKey: cacheKeyACUC,
+          error,
+        });
+        void deleteKey(cacheKeyACUC).catch(deleteError => {
+          logger.warn("Failed to delete malformed ACUC cache entry", {
+            cacheKey: cacheKeyACUC,
+            error: deleteError,
+          });
+        });
+      }
     }
   }
 
@@ -471,6 +538,7 @@ async function handleKeylessAuth(
   // main way the per-IP caps get bypassed. Fails open on any Spur error, and
   // runs before consuming quota so a flagged IP doesn't burn a request slot.
   if (await isKeylessIpSuspicious(ip)) {
+    keylessAuthTotal.inc({ mode, outcome: "suspicious" });
     logger.warn("Keyless request blocked: suspicious IP", {
       canonicalLog: "keyless/consume",
       ip,
@@ -504,6 +572,7 @@ async function handleKeylessAuth(
   try {
     result = await consumeKeylessRequest(ip);
   } catch (error) {
+    keylessAuthTotal.inc({ mode, outcome: "error" });
     // Limiter store (Redis) unavailable — fail closed with a controlled auth
     // response instead of surfacing a 500, and shed the free traffic while the
     // limiter can't enforce quotas.
@@ -528,6 +597,7 @@ async function handleKeylessAuth(
   };
 
   if (!result.ok) {
+    keylessAuthTotal.inc({ mode, outcome: result.reason ?? "error" });
     logger.warn("Keyless request blocked", {
       ...baseLog,
       blocked: true,
@@ -548,6 +618,7 @@ async function handleKeylessAuth(
   }
 
   logger.debug("Keyless request consumed", { ...baseLog, blocked: false });
+  keylessAuthTotal.inc({ mode, outcome: "allowed" });
 
   // Tag as a preview team so billing (autumn isPreviewTeam) and GCS persistence
   // are skipped automatically; mockPreviewACUC supplies concurrency 2 + credits.
@@ -590,18 +661,41 @@ export async function authenticateUser(
  * on to getAutumnRateLimiter, which stays the only place deciding the final
  * limit. An override makes the multiplier irrelevant, so we skip fetching it
  * from Autumn in that case rather than paying for a value that is discarded.
+ *
+ * `minMultiplier` floors the Autumn multiplier (trusted agent traffic passes
+ * the hobby multiplier). It never applies on top of an override, which already
+ * replaces the whole computation.
  */
 async function buildAuthenticatedRateLimiter(
   teamId: string,
   orgId: string | null | undefined,
   mode: RateLimiterMode,
   flags: TeamFlags,
+  minMultiplier?: number,
 ): Promise<RateLimiterRedis> {
-  const multiplier =
-    getRateLimitOverride(mode, flags?.rateLimitOverrides) !== undefined
-      ? 1
-      : await autumnService.getRateLimitMultiplier(teamId, orgId);
+  let multiplier: number;
+  if (getRateLimitOverride(mode, flags?.rateLimitOverrides) !== undefined) {
+    multiplier = 1;
+  } else {
+    multiplier = await autumnService.getRateLimitMultiplier(
+      teamId,
+      orgId ?? null,
+    );
+    if (minMultiplier !== undefined) {
+      multiplier = Math.max(multiplier, minMultiplier);
+    }
+  }
   return getAutumnRateLimiter(mode, multiplier, flags);
+}
+
+/**
+ * Whether the request carries a valid `__agentInterop` secret, i.e. comes from
+ * the trusted internal agent service. Read from the raw body because auth runs
+ * before the controller's zod parse — the same shape checkCreditsMiddleware
+ * relies on. Presence of the block alone is never trusted; only the secret.
+ */
+function isTrustedAgentInteropRequest(req): boolean {
+  return isAgentInteropSecretValid(req.body?.__agentInterop?.auth);
 }
 
 async function supaAuthenticateUser(
@@ -631,6 +725,14 @@ async function supaAuthenticateUser(
     req.headers["x-forwarded-for"] ||
     req.socket.remoteAddress) as string;
   const iptoken = incomingIP + token;
+
+  // An agent run fans one customer request out into ~10 sub-requests against
+  // the team's own bucket, so a free team (×1) gets throttled by its own agent.
+  // Floor trusted agent traffic at the hobby multiplier; paid plans already
+  // meet it and are unchanged.
+  const minRateMultiplier = isTrustedAgentInteropRequest(req)
+    ? HOBBY_RATE_LIMIT_MULTIPLIER
+    : undefined;
 
   let rateLimiter: RateLimiterRedis;
   let subscriptionData: { team_id: string } | null = null;
@@ -688,6 +790,7 @@ async function supaAuthenticateUser(
       chunk.org_id,
       mode,
       chunk.flags,
+      minRateMultiplier,
     );
   } else if (token.startsWith("fco_")) {
     // OAuth access token — resolve via introspection endpoint
@@ -757,6 +860,7 @@ async function supaAuthenticateUser(
       chunk.org_id,
       mode,
       chunk.flags,
+      minRateMultiplier,
     );
   } else {
     normalizedApi = parseApi(token);
@@ -788,6 +892,7 @@ async function supaAuthenticateUser(
       chunk.org_id,
       mode,
       chunk.flags,
+      minRateMultiplier,
     );
   }
 

@@ -24,7 +24,6 @@ import { getJobPriority } from "../../lib/job-priority";
 import { logRequest } from "../../services/logging/log_job";
 import { externalRequestId } from "../../lib/external-request-id";
 import { getErrorContactMessage } from "../../lib/deployment";
-import { captureExceptionWithZdrCheck } from "../../services/sentry";
 import type { BillingMetadata } from "../../services/billing/types";
 import { getScrapeZDR } from "../../lib/zdr-helpers";
 import {
@@ -85,8 +84,8 @@ export function detectUploadedFileKind(
     return "document";
   }
 
-  // Image uploads are OCR'd through FirePDF for teams with the imageOcr
-  // flag; for everyone else they stay unsupported.
+  // Image uploads are OCR'd through FirePDF where the deployment has image
+  // OCR on (lib/image-ocr-gate.ts); otherwise they stay unsupported.
   const isImage =
     imageOcrEnabled &&
     (IMAGE_EXTENSIONS.has(extension) ||
@@ -259,11 +258,7 @@ export function parseMultipartPayloadMiddleware(
     }
   }
 
-  // authMiddleware runs before this middleware, so the team's flags are
-  // available to decide whether image uploads are accepted.
-  const imageOcrEnabled = isImageOcrEnabled(
-    (req as unknown as RequestWithAuth).acuc?.flags,
-  );
+  const imageOcrEnabled = isImageOcrEnabled();
   const kind = detectUploadedFileKind(
     file.originalname || "",
     file.mimetype,
@@ -295,6 +290,12 @@ export async function parseController(
   req: RequestWithAuth<{}, ScrapeResponse, ParseRequest>,
   res: Response<ScrapeResponse>,
 ) {
+  // Resolved before the root span starts so the whole request trace stays
+  // unrecorded for zero-data-retention requests (see otel-tracer).
+  const zeroDataRetentionTrace =
+    getScrapeZDR(req.acuc?.flags) === "forced" ||
+    req.body?.zeroDataRetention === true;
+
   return withSpan(
     "api.parse.request",
     async span => {
@@ -355,6 +356,7 @@ export async function parseController(
         });
         return res.status(403).json({
           success: false,
+          code: permissions.code,
           error: permissions.error,
         });
       }
@@ -480,7 +482,7 @@ export async function parseController(
 
         const baseConcurrency = await getEffectiveConcurrencyLimit(
           req.auth.team_id,
-          req.acuc?.org_id,
+          req.acuc?.org_id ?? null,
         );
         const concurrency = boostConcurrency
           ? baseConcurrency * AGENT_INTEROP_CONCURRENCY_BOOST
@@ -495,6 +497,7 @@ export async function parseController(
           async limited => {
             const jobPriority = await getJobPriority({
               team_id: req.auth.team_id,
+              org_id: req.acuc?.org_id ?? null,
               basePriority: 10,
             });
 
@@ -658,18 +661,6 @@ export async function parseController(
             path: req.path,
             teamId: req.auth.team_id,
           });
-          captureExceptionWithZdrCheck(e, {
-            tags: {
-              errorId: id,
-              version: "v2",
-              teamId: req.auth.team_id,
-            },
-            extra: {
-              path: req.path,
-              fileName: req.body.file.filename,
-            },
-            zeroDataRetention,
-          });
           setSpanAttributes(span, {
             "parse.status_code": 500,
             "parse.error_id": id,
@@ -771,6 +762,7 @@ export async function parseController(
         "http.route": "/v2/parse",
       },
       kind: SpanKind.SERVER,
+      zeroDataRetention: zeroDataRetentionTrace,
     },
   );
 }
