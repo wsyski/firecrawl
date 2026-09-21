@@ -44,7 +44,7 @@ async function currentModelId(): Promise<string | undefined> {
     });
     await inFlight;
   }
-  return loadedModel ?? config.MODEL_NAME ?? firstConfiguredModel;
+  return loadedModel ?? firstConfiguredModel ?? config.MODEL_NAME;
 }
 
 // Servers that swap models on demand (llama-swap) keep one model resident, and
@@ -71,7 +71,7 @@ export const localModelFetch: typeof fetch = async (input, init) => {
   const model = (await currentModelId()) ?? body.model;
   const next: Record<string, unknown> = { ...body };
   if (typeof model === "string" && model !== body.model) next.model = model;
-  // Thinking models (e.g. Qwen/ornith-1.5 templates) can spend the whole
+  // Thinking models (e.g. Nex-N2.5 templates) can spend the whole
   // budget on reasoning_content, leaving `content` empty. Only chat bodies;
   // a caller-provided value wins.
   if (disableThinking) {
