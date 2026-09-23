@@ -60,6 +60,7 @@ describe("localModelFetch", () => {
     vi.restoreAllMocks();
     config.MODEL_NAME = "fallback-model";
     config.LLM_DISABLE_THINKING = undefined;
+    config.LLM_SLOT_ID = undefined;
   });
 
   it("rewrites the request to the model the server has loaded", async () => {
@@ -165,5 +166,28 @@ describe("localModelFetch", () => {
     await chat({ model: "model-b", messages: [{ role: "user" }] });
     const sent = JSON.parse(chatCall(fetchMock)[1].body);
     expect(sent.chat_template_kwargs).toBeUndefined();
+  });
+  it("pins chat bodies to LLM_SLOT_ID", async () => {
+    config.LLM_SLOT_ID = 2;
+    const fetchMock = stubFetch("model-b");
+    await chat({ model: "model-b", messages: [{ role: "user" }] });
+    expect(JSON.parse(chatCall(fetchMock)[1].body).id_slot).toBe(2);
+  });
+
+  it("lets a caller-provided id_slot win", async () => {
+    config.LLM_SLOT_ID = 2;
+    const fetchMock = stubFetch("model-b");
+    await chat({ model: "model-b", messages: [{ role: "user" }], id_slot: 0 });
+    expect(JSON.parse(chatCall(fetchMock)[1].body).id_slot).toBe(0);
+  });
+
+  it("does not pin non-chat bodies", async () => {
+    config.LLM_SLOT_ID = 2;
+    const fetchMock = stubFetch("model-b");
+    await localModelFetch("http://llama-swap.test:8081/v1/embeddings", {
+      method: "POST",
+      body: JSON.stringify({ input: "x" }),
+    });
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).id_slot).toBeUndefined();
   });
 });

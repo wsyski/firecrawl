@@ -502,6 +502,7 @@ const configSchema = z.object({
   MODEL_EMBEDDING_NAME: z.string().optional(),
   OLLAMA_BASE_URL: z.string().optional(),
   LLM_DISABLE_THINKING: z.stringbool().optional(),
+  LLM_SLOT_ID: z.coerce.number().int().nonnegative().optional(),
   VERTEX_CREDENTIALS: z.string().optional(),
 
   // LangSmith (tracing for interact agent)

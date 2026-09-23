@@ -58,6 +58,7 @@ export const localModelFetch: typeof fetch = async (input, init) => {
     model?: unknown;
     messages?: unknown;
     chat_template_kwargs?: Record<string, unknown>;
+    id_slot?: unknown;
   };
   try {
     body = JSON.parse(init.body);
@@ -66,7 +67,12 @@ export const localModelFetch: typeof fetch = async (input, init) => {
   }
   const isChat = Array.isArray(body.messages);
   const disableThinking = isChat && config.LLM_DISABLE_THINKING === true;
-  if (typeof body.model !== "string" && !disableThinking)
+  // llama-server: keep every Firecrawl call on its own slot, so a run of
+  // different pages never evicts another client's cached conversation. A busy
+  // slot queues the request instead of taking another one.
+  const pinSlot =
+    isChat && config.LLM_SLOT_ID !== undefined && body.id_slot === undefined;
+  if (typeof body.model !== "string" && !disableThinking && !pinSlot)
     return fetch(input, init);
   const model = (await currentModelId()) ?? body.model;
   const next: Record<string, unknown> = { ...body };
@@ -80,7 +86,12 @@ export const localModelFetch: typeof fetch = async (input, init) => {
       enable_thinking: body.chat_template_kwargs?.enable_thinking ?? false,
     };
   }
-  if (next.model === body.model && next.chat_template_kwargs === body.chat_template_kwargs)
+  if (pinSlot) next.id_slot = config.LLM_SLOT_ID;
+  if (
+    next.model === body.model &&
+    next.chat_template_kwargs === body.chat_template_kwargs &&
+    next.id_slot === body.id_slot
+  )
     return fetch(input, init);
   return fetch(input, { ...init, body: JSON.stringify(next) });
 };
