@@ -15,6 +15,9 @@ async function probe(): Promise<void> {
   try {
     const res = await fetch(`${config.OPENAI_BASE_URL}/models`, {
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+      ...(config.OPENAI_API_KEY && {
+        headers: { Authorization: `Bearer ${config.OPENAI_API_KEY}` },
+      }),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const body = (await res.json()) as {

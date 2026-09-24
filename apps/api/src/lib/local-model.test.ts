@@ -65,6 +65,7 @@ describe("localModelFetch", () => {
     config.LLM_DISABLE_THINKING = undefined;
     config.LLM_SLOT_ID = undefined;
     config.LLM_LOCK_FILE = undefined;
+    config.OPENAI_API_KEY = undefined;
   });
 
   it("rewrites the request to the model the server has loaded", async () => {
@@ -193,6 +194,25 @@ describe("localModelFetch", () => {
       body: JSON.stringify({ input: "x" }),
     });
     expect(JSON.parse(fetchMock.mock.calls[0][1].body).id_slot).toBeUndefined();
+  });
+
+  it("sends OPENAI_API_KEY on the model probe", async () => {
+    config.OPENAI_API_KEY = "sk-test";
+    const fetchMock = stubFetch("model-b");
+    await chat({ model: "gpt-4o-mini", messages: [] });
+    const probeCall = fetchMock.mock.calls.find(([input]: any[]) =>
+      String(input).endsWith("/models"),
+    );
+    expect(probeCall?.[1]?.headers).toEqual({ Authorization: "Bearer sk-test" });
+  });
+
+  it("sends no Authorization on the probe without OPENAI_API_KEY", async () => {
+    const fetchMock = stubFetch("model-b");
+    await chat({ model: "gpt-4o-mini", messages: [] });
+    const probeCall = fetchMock.mock.calls.find(([input]: any[]) =>
+      String(input).endsWith("/models"),
+    );
+    expect(probeCall?.[1]?.headers).toBeUndefined();
   });
 
   describe("LLM_LOCK_FILE", () => {

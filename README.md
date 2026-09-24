@@ -62,7 +62,7 @@ never changes a field the caller already set. Unit tests: `apps/api/src/lib/loca
 
 **Resident model.** llama-swap keeps one model loaded and swapping costs a full reload, so the `model` field
 is rewritten to: the loaded model → `MODEL_NAME` → the first model `GET $OPENAI_BASE_URL/models` lists → the
-caller's own name. The probe is cached 30 s per process and a failed probe is non-fatal (warns once:
+caller's own name. The probe sends `OPENAI_API_KEY` as a Bearer token (llama-swap with `apiKeys` rejects it otherwise), is cached 30 s per process, and a failed probe is non-fatal (warns once:
 `Could not read loaded model from OPENAI_BASE_URL`).
 
 **`LLM_DISABLE_THINKING=true`** adds `chat_template_kwargs.enable_thinking: false` to chat bodies, so a
@@ -92,7 +92,7 @@ single-file bind mount would not follow the file being created and deleted).
 
 ```bash
 OPENAI_BASE_URL=http://192.168.1.100:8081/v1   # host LAN IP; host.docker.internal is not reachable on this host
-OPENAI_API_KEY=llama-swap                      # any non-empty value
+OPENAI_API_KEY=<llama-swap apiKeys key>       # sent on chat calls and on the /models probe
 MODEL_NAME=qwen38-27b                          # cold-start default, must match a llama-swap config.yaml key
 LLM_DISABLE_THINKING=true
 LLM_SLOT_ID=1
