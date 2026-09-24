@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { config } from "../config";
 import { logger } from "./logger";
 
@@ -53,6 +54,17 @@ async function currentModelId(): Promise<string | undefined> {
 // synchronously at getModel() time is always one request stale, which is
 // exactly when the swap happens.
 export const localModelFetch: typeof fetch = async (input, init) => {
+  // Manual kill switch: while the lock file exists (bind-mounted from the
+  // host), fail exactly like an unreachable server so the existing outage
+  // handling applies unchanged.
+  if (config.LLM_LOCK_FILE && existsSync(config.LLM_LOCK_FILE)) {
+    throw new TypeError("fetch failed", {
+      cause: Object.assign(
+        new Error(`connect ECONNREFUSED (local LLM locked: ${config.LLM_LOCK_FILE})`),
+        { code: "ECONNREFUSED" },
+      ),
+    });
+  }
   if (typeof init?.body !== "string") return fetch(input, init);
   let body: {
     model?: unknown;

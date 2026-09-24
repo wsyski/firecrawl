@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../config", () => ({
@@ -61,6 +64,7 @@ describe("localModelFetch", () => {
     config.MODEL_NAME = "fallback-model";
     config.LLM_DISABLE_THINKING = undefined;
     config.LLM_SLOT_ID = undefined;
+    config.LLM_LOCK_FILE = undefined;
   });
 
   it("rewrites the request to the model the server has loaded", async () => {
@@ -189,5 +193,45 @@ describe("localModelFetch", () => {
       body: JSON.stringify({ input: "x" }),
     });
     expect(JSON.parse(fetchMock.mock.calls[0][1].body).id_slot).toBeUndefined();
+  });
+
+  describe("LLM_LOCK_FILE", () => {
+    let dir: string;
+    beforeEach(() => {
+      dir = mkdtempSync(join(tmpdir(), "llm-lock-"));
+      return () => rmSync(dir, { recursive: true, force: true });
+    });
+
+    it("fails like an unreachable server while the lock file exists", async () => {
+      config.LLM_LOCK_FILE = join(dir, "llm.lock");
+      writeFileSync(config.LLM_LOCK_FILE, "");
+      const fetchMock = stubFetch("model-b");
+      const err = await chat({ model: "model-b", messages: [] }).catch(e => e);
+      expect(err).toBeInstanceOf(TypeError);
+      expect(err.message).toBe("fetch failed");
+      expect(err.cause.code).toBe("ECONNREFUSED");
+      expect(err.cause.message).toContain(config.LLM_LOCK_FILE);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("blocks non-chat bodies too, as an outage would", async () => {
+      config.LLM_LOCK_FILE = join(dir, "llm.lock");
+      writeFileSync(config.LLM_LOCK_FILE, "");
+      const fetchMock = stubFetch("model-b");
+      await expect(
+        localModelFetch("http://llama-swap.test:8081/v1/embeddings", {
+          method: "POST",
+          body: JSON.stringify({ input: "x" }),
+        }),
+      ).rejects.toThrow("fetch failed");
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("passes through when the lock file is absent", async () => {
+      config.LLM_LOCK_FILE = join(dir, "llm.lock");
+      const fetchMock = stubFetch("model-b");
+      await chat({ model: "gpt-4o-mini", messages: [] });
+      expect(sentModel(fetchMock)).toBe("model-b");
+    });
   });
 });

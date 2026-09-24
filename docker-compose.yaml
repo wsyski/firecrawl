@@ -40,6 +40,7 @@ x-common-env: &common-env
   OPENAI_BASE_URL: ${OPENAI_BASE_URL}
   LLM_DISABLE_THINKING: ${LLM_DISABLE_THINKING:-}
   LLM_SLOT_ID: ${LLM_SLOT_ID:-}
+  LLM_LOCK_FILE: ${LLM_LOCK_FILE:-}
   MODEL_NAME: ${MODEL_NAME}
   MODEL_EMBEDDING_NAME: ${MODEL_EMBEDDING_NAME}
   OLLAMA_BASE_URL: ${OLLAMA_BASE_URL}
@@ -125,6 +126,8 @@ services:
       - "${PORT:-3002}:${INTERNAL_PORT:-3002}"
     volumes:
       - fdb-cluster-file:/var/fdb:ro
+      # Host dir for llm.lock (LLM_LOCK_FILE); a directory, so the file can come and go.
+      - /opt/llm/lock:/llm-lock:ro
     command: node dist/src/harness.js --start-docker
     # Resource limits for Docker Compose (not Swarm)
     # Increase if you have more CPU cores/RAM available
