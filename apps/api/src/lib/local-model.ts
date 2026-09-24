@@ -45,7 +45,7 @@ async function currentModelId(): Promise<string | undefined> {
     });
     await inFlight;
   }
-  return loadedModel ?? firstConfiguredModel ?? config.MODEL_NAME;
+  return loadedModel ?? config.MODEL_NAME ?? firstConfiguredModel;
 }
 
 // Servers that swap models on demand (llama-swap) keep one model resident, and
