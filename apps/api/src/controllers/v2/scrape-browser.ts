@@ -1,4 +1,3 @@
-import { createHash } from "crypto";
 import { v7 as uuidv7 } from "uuid";
 import { Response } from "express";
 import { z } from "zod";
@@ -73,6 +72,7 @@ import { getScrapeJobAccess } from "../../lib/operational-job-access";
 import { readScrapeJobState } from "../../lib/job-state-store";
 import { scrapeQueue } from "../../services/worker/nuq-router";
 import { recordJobStorePostgresFallback } from "../../lib/job-store-fallback";
+import { browserProfileStorageId } from "../../lib/browser-profiles";
 
 // ---------------------------------------------------------------------------
 // Schemas
@@ -483,6 +483,18 @@ export async function scrapeStopInteractiveBrowserController(
     sessionId: session.id,
     browserId: session.browser_id,
   });
+  // A destroyed session was already released and billed (by an earlier
+  // DELETE or by the browser service's session.ended webhook). The browser
+  // service no longer knows it, so asking it again can only fail. Report
+  // success so that DELETE stays idempotent.
+  if (session.status === "destroyed") {
+    logger.info("Browser session already destroyed, nothing to release");
+    return res.status(200).json({
+      success: true,
+      cleanupQueued: true,
+    });
+  }
+
   logger.info("Deleting browser session");
 
   let deleteResult: BrowserServiceDeleteResponse;
@@ -567,6 +579,9 @@ export async function scrapeStopInteractiveBrowserController(
     req.acuc?.api_key_id ?? null,
     {
       endpoint: "interact",
+      // Not set from this request: the stop request is not the one that
+      // created the session, so its header would misattribute the charge.
+      // firebill finds the creating request's id by the session id.
       jobId: session.id,
       chargeId: `${session.id}:scrape-browser`,
     },
@@ -712,12 +727,8 @@ async function createSessionForScrape(
 
   let persistentStorage: { uniqueId: string; write: boolean } | undefined;
   if (profile) {
-    const teamHash = createHash("sha256")
-      .update(req.auth.team_id)
-      .digest("hex")
-      .slice(0, 16);
     persistentStorage = {
-      uniqueId: `${teamHash}_${profile.name}`,
+      uniqueId: browserProfileStorageId(req.auth.team_id, profile.name),
       write: profile.saveChanges !== false,
     };
   }
@@ -920,6 +931,7 @@ async function createSessionForScrape(
       ttl_total: ttl,
       ttl_without_activity: activityTtl ?? null,
       credits_used: null,
+      profile_name: profile?.name ?? null,
     });
 
     invalidateActiveBrowserSessionCount(req.auth.team_id).catch(() => {});

@@ -21,11 +21,7 @@ import { config } from "../../../../../config";
  * The rate-limit Redis client is imported lazily so importing the cache
  * module never opens a connection (tests, tooling).
  */
-export type RefreshDecision =
-  | "allowed"
-  | "limited"
-  | "disabled"
-  | "unavailable";
+type RefreshDecision = "allowed" | "limited" | "disabled" | "unavailable";
 
 let limiter: RateLimiterRedis | null = null;
 
@@ -80,6 +76,17 @@ async function decide(teamId: string | undefined): Promise<RefreshDecision> {
   } catch (err) {
     return err instanceof RateLimiterRes ? "limited" : "unavailable";
   }
+}
+
+/** Remember a decision taken elsewhere for this request, so a fallback engine reuses it. */
+export function recordRefreshDecision(
+  scrapeId: string | undefined,
+  decision: RefreshDecision,
+): void {
+  if (!scrapeId) return;
+  const now = Date.now();
+  prune(now);
+  decisions.set(scrapeId, { decision, at: now });
 }
 
 /**
