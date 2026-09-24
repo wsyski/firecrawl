@@ -37,6 +37,134 @@
 
 ---
 
+## This fork: local LLM via llama-swap / llama.cpp
+
+> `wsyski/firecrawl` — upstream Firecrawl, self-hosted with Docker Compose, with the LLM features
+> (JSON extraction, summaries) served by a local [llama.cpp](https://github.com/ggml-org/llama.cpp)
+> `llama-server` behind [llama-swap](https://github.com/mostlygeek/llama-swap) instead of a cloud API.
+> Everything below is fork-only; the rest of this README is upstream's.
+
+### Non-standard features
+
+| Feature | Setting | Where |
+|---|---|---|
+| Chat Completions for any custom `OPENAI_BASE_URL` (llama-server has no Responses API) | automatic | `apps/api/src/lib/generic-ai.ts` |
+| Use the model the server already has loaded, instead of forcing a swap | automatic | `apps/api/src/lib/local-model.ts` |
+| Disable reasoning on chat requests | `LLM_DISABLE_THINKING=true` | `local-model.ts` |
+| Pin every chat request to one llama-server slot | `LLM_SLOT_ID=<n>` | `local-model.ts` |
+| Manual kill switch for all LLM calls | `LLM_LOCK_FILE=<path>` | `local-model.ts`, `docker-compose.yaml` |
+| 10-minute timeouts for JSON/extract requests (slow local models) | automatic | `apps/api/src/controllers/v1/types.ts` |
+| `restart: unless-stopped` on all long-running services | automatic | `docker-compose.yaml` |
+
+All LLM-side behaviour lives in `localModelFetch` (`apps/api/src/lib/local-model.ts`), installed as the
+`fetch` of the OpenAI provider whenever `OPENAI_BASE_URL` is set. It rewrites each outgoing request body and
+never changes a field the caller already set. Unit tests: `apps/api/src/lib/local-model.test.ts`.
+
+**Resident model.** llama-swap keeps one model loaded and swapping costs a full reload, so the `model` field
+is rewritten to: the loaded model → `MODEL_NAME` → the first model `GET $OPENAI_BASE_URL/models` lists → the
+caller's own name. The probe is cached 30 s per process and a failed probe is non-fatal (warns once:
+`Could not read loaded model from OPENAI_BASE_URL`).
+
+**`LLM_DISABLE_THINKING=true`** adds `chat_template_kwargs.enable_thinking: false` to chat bodies, so a
+reasoning model does not spend the whole budget on `reasoning_content` and return empty `content`.
+
+**`LLM_SLOT_ID=<n>`** adds llama.cpp's `id_slot` to every chat body. Extraction prompts share only a short
+instruction prefix, so unpinned, each page would take the least-recently-used slot and evict another
+client's cached conversation (e.g. an agent session). Pinned, Firecrawl uses at most one slot; a busy slot
+queues the request, so concurrent Firecrawl jobs run one at a time on the model.
+
+- **`id_slot` wraps modulo the slot count** (`get_slot_by_id` in llama-server): with `--parallel 2`,
+  `LLM_SLOT_ID=2` silently means slot 0. Keep it below `--parallel`.
+- The request that takes over the slot saves the previous occupant to llama-server's RAM prompt cache
+  (`--cache-ram`), so an evicted session is restored in seconds instead of re-prefilled — as long as the
+  cache is large enough to hold it.
+
+**`LLM_LOCK_FILE=<path>`** — while that file exists, every request `localModelFetch` would send fails exactly
+like an unreachable server (`TypeError: fetch failed`, cause `ECONNREFUSED (local LLM locked: <path>)`). No new
+failure path: the AI SDK retries it as a network error (3 attempts, ~6 s) and the scrape still succeeds, just
+without the LLM formats. The check runs per request, so no restart is needed. The file lives on the host:
+`docker-compose.yaml` bind-mounts the host **directory** `/opt/llm/lock` read-only at `/llm-lock` (a
+single-file bind mount would not follow the file being created and deleted).
+
+### Setup
+
+`.env` at the repo root (not committed):
+
+```bash
+OPENAI_BASE_URL=http://192.168.1.100:8081/v1   # host LAN IP; host.docker.internal is not reachable on this host
+OPENAI_API_KEY=llama-swap                      # any non-empty value
+MODEL_NAME=qwen38-27b                          # cold-start default, must match a llama-swap config.yaml key
+LLM_DISABLE_THINKING=true
+LLM_SLOT_ID=1
+LLM_LOCK_FILE=/llm-lock/llm.lock
+LOGGING_LEVEL=info                             # the default "debug" dumps every extraction
+```
+
+The model server must listen on all interfaces, not only localhost, or the containers cannot reach it.
+
+```bash
+mkdir -p /opt/llm/lock                  # host directory for the lock file (mounted into the api container)
+docker compose up -d --build            # build and start
+docker compose up -d --build api        # rebuild and redeploy only the api after a code or .env change
+docker compose ps
+docker compose logs api --tail=200
+curl -s -o /dev/null -w '%{http_code}\n' http://localhost:3002/v0/health/liveness   # expect 200
+```
+
+### Examples
+
+JSON extraction through the local model (`/v2/scrape`; on `/v1/scrape` the shape is
+`"formats": ["json"]` plus a separate `jsonOptions` object):
+
+```bash
+curl -s -X POST http://localhost:3002/v2/scrape -H 'Content-Type: application/json' -d '{
+  "url": "https://example.com",
+  "formats": [{"type": "json", "prompt": "Extract the page title",
+               "schema": {"type": "object", "properties": {"title": {"type": "string"}}}}]
+}'
+# -> {"success":true,"data":{"json":{"title":"Example Domain"}, ...}}
+```
+
+Switch the LLM off and on, e.g. while two agent sessions need both llama-server slots:
+
+```bash
+touch /opt/llm/lock/llm.lock   # lock: scrapes still work, LLM formats fail as if the server were down
+rm /opt/llm/lock/llm.lock      # unlock
+```
+
+The same scrape while locked:
+
+```
+{"success":true,"data":{"json":null, ...,
+ "warning":"JSON extraction failed: Failed after 3 attempts. Last error: Cannot connect to API:
+            connect ECONNREFUSED (local LLM locked: /llm-lock/llm.lock)"}}
+```
+
+Check the settings inside the container, and that Firecrawl hits its pinned slot (on the llama-swap host):
+
+```bash
+docker compose exec -T api printenv LLM_SLOT_ID LLM_LOCK_FILE
+journalctl -u llama-swap -o cat | grep 'selected slot'
+# -> slot get_availabl: id  1 | task -1 | selected slot by id (1)
+```
+
+Run the fork's unit tests (18 tests). On this host `pnpm exec`/`pnpm test` first try to reinstall
+dependencies and fail building the native `foundationdb` module without its client headers, so call the
+installed vitest directly:
+
+```bash
+cd apps/api
+node "$(ls -d node_modules/.pnpm/vitest@*/node_modules/vitest | head -1)/vitest.mjs" run src/lib/local-model.test.ts
+```
+
+### Keeping up with upstream
+
+`git fetch upstream && git merge upstream/main`, then run the unit tests above, rebuild the `api` image and
+repeat the JSON extraction example. Conflicts, if any, are in `local-model.ts`, `generic-ai.ts`, `config.ts`,
+`controllers/v1/types.ts`, `docker-compose.yaml` and this section of the README.
+
+---
+
 # **🔥 Firecrawl**
 
 **The API to search, scrape, and interact with the web at scale. 🔥** The web data API to find sources, extract content, and turn it into clean Markdown or structured data your agents can ship with. Open source and available as a [hosted service](https://firecrawl.dev/?ref=github).
