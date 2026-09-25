@@ -1,39 +1,13 @@
-<h3 align="center">
-  <a name="readme-top"></a>
-  <img
-    src="https://raw.githubusercontent.com/firecrawl/firecrawl/main/img/firecrawl_logo.png"
-    height="200"
-  >
-</h3>
+# Firecrawl
 
-<div align="center">
-  <a href="https://github.com/firecrawl/firecrawl/blob/main/LICENSE">
-    <img src="https://img.shields.io/github/license/firecrawl/firecrawl" alt="License">
-  </a>
-  <a href="https://pepy.tech/project/firecrawl-py">
-    <img src="https://static.pepy.tech/badge/firecrawl-py" alt="Downloads">
-  </a>
-  <a href="https://GitHub.com/firecrawl/firecrawl/graphs/contributors">
-    <img src="https://img.shields.io/github/contributors/firecrawl/firecrawl.svg" alt="GitHub Contributors">
-  </a>
-  <a href="https://firecrawl.dev">
-    <img src="https://img.shields.io/badge/Visit-firecrawl.dev-orange" alt="Visit firecrawl.dev">
-  </a>
-</div>
+![Firecrawl logo](https://raw.githubusercontent.com/firecrawl/firecrawl/main/img/firecrawl_logo.png)
 
-<div>
-  <p align="center">
-    <a href="https://twitter.com/firecrawl">
-      <img src="https://img.shields.io/badge/Follow%20on%20X-000000?style=for-the-badge&logo=x&logoColor=white" alt="Follow on X" />
-    </a>
-    <a href="https://www.linkedin.com/company/104100957">
-      <img src="https://img.shields.io/badge/Follow%20on%20LinkedIn-0077B5?style=for-the-badge&logo=linkedin&logoColor=white" alt="Follow on LinkedIn" />
-    </a>
-    <a href="https://discord.gg/firecrawl">
-      <img src="https://img.shields.io/badge/Join%20our%20Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Join our Discord" />
-    </a>
-  </p>
-</div>
+[![License](https://img.shields.io/github/license/firecrawl/firecrawl)](https://github.com/firecrawl/firecrawl/blob/main/LICENSE)
+[![Downloads](https://static.pepy.tech/badge/firecrawl-py)](https://pepy.tech/project/firecrawl-py)
+[![GitHub Contributors](https://img.shields.io/github/contributors/firecrawl/firecrawl.svg)](https://GitHub.com/firecrawl/firecrawl/graphs/contributors)
+[![Visit firecrawl.dev](https://img.shields.io/badge/Visit-firecrawl.dev-orange)](https://firecrawl.dev)
+
+[Follow on X](https://twitter.com/firecrawl) • [Follow on LinkedIn](https://www.linkedin.com/company/104100957) • [Join our Discord](https://discord.gg/firecrawl)
 
 ---
 
@@ -227,8 +201,7 @@ app = Firecrawl(api_key="fc-YOUR_API_KEY")
 search_result = app.search("firecrawl", limit=5)
 ```
 
-<details>
-<summary><b>Node.js / cURL / CLI</b></summary>
+#### Node.js / cURL / CLI
 
 **Node.js**
 ```javascript
@@ -254,8 +227,6 @@ curl -X POST 'https://api.firecrawl.dev/v2/search' \
 ```bash
 firecrawl search "firecrawl" --limit 5
 ```
-</details>
-
 Output:
 ```json
 [
@@ -284,8 +255,7 @@ app = Firecrawl(api_key="fc-YOUR_API_KEY")
 result = app.scrape('firecrawl.dev')
 ```
 
-<details>
-<summary><b>Node.js / cURL / CLI</b></summary>
+#### Node.js / cURL / CLI
 
 **Node.js**
 ```javascript
@@ -311,8 +281,6 @@ curl -X POST 'https://api.firecrawl.dev/v2/scrape' \
 firecrawl scrape https://firecrawl.dev
 firecrawl https://firecrawl.dev --only-main-content
 ```
-</details>
-
 Output:
 ```
 # Firecrawl
@@ -342,8 +310,7 @@ app.interact(scrape_id, prompt="Search for 'mechanical keyboard'")
 app.interact(scrape_id, prompt="Click the first result")
 ```
 
-<details>
-<summary><b>Node.js / cURL / CLI</b></summary>
+#### Node.js / cURL / CLI
 
 **Node.js**
 ```javascript
@@ -382,7 +349,6 @@ firecrawl scrape https://amazon.com
 firecrawl interact exec --prompt "Search for 'mechanical keyboard'"
 firecrawl interact exec --prompt "Click the first result"
 ```
-</details>
 
 Output:
 ```json
@@ -802,7 +768,7 @@ dependencies {
     implementation 'com.github.firecrawl:firecrawl-java-sdk:2.0'
 }
 ```
-```java
+```
 import dev.firecrawl.client.FirecrawlClient;
 import dev.firecrawl.model.*;
 
@@ -1061,8 +1027,4 @@ This project is primarily licensed under the GNU Affero General Public License v
 
 **It is the sole responsibility of end users to respect websites' policies when scraping.** Users are advised to adhere to applicable privacy policies and terms of use. By default, Firecrawl respects robots.txt directives. By using Firecrawl, you agree to comply with these conditions.
 
-<p align="right" style="font-size: 14px; color: #555; margin-top: 20px;">
-  <a href="#readme-top" style="text-decoration: none; color: #007bff; font-weight: bold;">
-    ↑ Back to Top ↑
-  </a>
-</p>
+[↑ Back to Top ↑](#firecrawl)
