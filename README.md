@@ -67,7 +67,7 @@ single-file bind mount would not follow the file being created and deleted).
 ```bash
 OPENAI_BASE_URL=http://192.168.1.100:8081/v1   # host LAN IP; host.docker.internal is not reachable on this host
 OPENAI_API_KEY=<llama-swap apiKeys key>       # sent on chat calls and on the /models probe
-MODEL_NAME=qwen38-27b                          # cold-start default, must match a llama-swap config.yaml key
+MODEL_NAME=swift15-27b                          # cold-start default, must match a llama-swap config.yaml key
 LLM_DISABLE_THINKING=true
 LLM_SLOT_ID=1
 LLM_LOCK_FILE=/llm-lock/llm.lock
