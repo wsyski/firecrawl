@@ -1,3 +1,4 @@
+import { agentHintsMiddleware } from "../middlewares/agent-hints";
 import express from "express";
 import multer from "multer";
 import { config } from "../config";
@@ -63,17 +64,15 @@ import { agentSnapshotController } from "../controllers/v2/agent-snapshot";
 import { agentSkillController } from "../controllers/v2/agent-skill";
 import { agentThreadController } from "../controllers/v2/agent-thread";
 import {
+  browserProfileDeleteController,
   browserCreateController,
   browserExecuteController,
   browserDeleteController,
   browserListController,
-  browserProfileDeleteController,
-  browserWebhookDestroyedController,
-} from "../controllers/v2/browser";
-import {
   browserReplayController,
   browserReplayPageController,
-} from "../controllers/v2/browser-replay";
+  browserStatusController,
+} from "../controllers/v2/browser";
 import { activityController } from "../controllers/v1/activity";
 import {
   getTeamThreatProtectionController,
@@ -189,6 +188,7 @@ registerMcpActionLogReadRoute(
 
 v2Router.post(
   "/search",
+  agentHintsMiddleware("search"),
   researchCategoryNoticeMiddleware,
   authMiddleware(RateLimiterMode.Search, { allowKeyless: true }),
   countryCheck,
@@ -226,6 +226,7 @@ v2Router.put(
 
 v2Router.post(
   "/parse",
+  agentHintsMiddleware("parse"),
   authMiddleware(RateLimiterMode.Scrape, { allowKeyless: true }),
   countryCheck,
   checkCreditsMiddleware(1),
@@ -235,6 +236,7 @@ v2Router.post(
 
 v2Router.post(
   "/scrape",
+  agentHintsMiddleware("scrape"),
   authMiddleware(RateLimiterMode.Scrape, { allowKeyless: true }),
   countryCheck,
   checkCreditsMiddleware(1),
@@ -274,6 +276,7 @@ v2Router.post(
 
 v2Router.post(
   "/map",
+  agentHintsMiddleware("map"),
   authMiddleware(RateLimiterMode.Map),
   checkCreditsMiddleware(1),
   blocklistMiddleware,
@@ -667,9 +670,10 @@ v2Router.delete(
   wrap(browserDeleteController),
 );
 
-v2Router.post(
-  "/browser/webhook/destroyed",
-  wrap(browserWebhookDestroyedController),
+v2Router.get(
+  ["/browser/:sessionId", "/interact/:sessionId"],
+  authMiddleware(RateLimiterMode.BrowserExecute),
+  wrap(browserStatusController),
 );
 
 // Support agent proxy — forwards to the support-agent service.
