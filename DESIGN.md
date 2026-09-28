@@ -17,7 +17,7 @@ Firecrawl is a web scraper API. The directory is a monorepo:
 
 **`vitest.config.ts`** sets `globals: true` (no `describe`/`it`/`expect` imports), the `forks` pool, `isolate: true` and a 120s per-test timeout. The suite talks to real services and manages mock state by hand, so these are load-bearing defaults rather than preferences.
 
-**Gating.** Snips run under several configurations, so a test that needs an external service is gated with `describeIf`/`itIf`/`concurrentIf` and the constants from `src/__tests__/snips/lib.ts` (`TEST_PRODUCTION`, `HAS_AI`, `HAS_FIRE_ENGINE`, `HAS_MODEL_SWAP`, ...). Reading `process.env` directly in a test bypasses that and is wrong.
+**Gating.** Snips run under several configurations, so a test that needs an external service is gated with `describeIf`/`itIf`/`concurrentIf` and the constants from `src/__tests__/snips/lib.ts` (`TEST_PRODUCTION`, `HAS_AI`, `HAS_FIRE_ENGINE`, ...). Reading `process.env` directly in a test bypasses that and is wrong.
 
 ### Running one snip against an already-running stack
 
@@ -35,11 +35,9 @@ cd apps/api && set -a && . ../../.env && set +a && \
 
 ## Local LLM model selection
 
-`src/lib/local-model.ts` exports `localModelFetch`, installed as the OpenAI provider's `fetch` option whenever `OPENAI_BASE_URL` is set. It rewrites the outgoing request body's `model` to: the model the server reports as loaded → `MODEL_NAME` → the first model the server lists → the model the caller named.
+Firecrawl does not pick the local model; llama-swap does. `MODEL_NAME=default` names a llama-swap selector with the `warm` strategy (llama-swap v241+, declared in llama-swap's `config.yaml`): per request it serves a `ready` target, else a `starting` one, else loads `targets[0]` (`swift15-27b`). So a scrape adopts whatever model another client already has loaded, and the choice is made atomically inside llama-swap rather than by a Firecrawl-side probe that can go stale between the check and the request.
 
-The point is servers that swap models on demand (llama-swap): only one model is resident and naming another costs a reload from disk, so a scrape must adopt whatever is already loaded. **Resolving this synchronously inside `getModel()` does not work** — a cached id read synchronously is always one request stale, and the stale request is exactly the one that triggers the swap. `getModel()` cannot be `async` (default-parameter positions across ~35 call sites), which is why the resolution lives at the fetch layer where the probe can be awaited. Probe results are cached 30s per process, concurrent callers coalesce onto one in-flight probe, and any failure degrades to `MODEL_NAME` rather than failing the request.
-
-Covered by `src/lib/local-model.test.ts` and the live `src/__tests__/snips/v2/local-model.test.ts`. Background: `docs/superpowers/plans/2026-07-11-local-docker-lmstudio.md`.
+`src/lib/local-model.ts` exports `localModelFetch`, installed as the OpenAI provider's `fetch` option only when `isLocalLlmUrl(OPENAI_BASE_URL)` (loopback, private/Tailscale IP, single-label or `*.local`/`*.lan`/`*.internal` host). It never touches `model`; it adds llama.cpp fields to chat bodies (`LLM_DISABLE_THINKING`, `LLM_SLOT_ID`) and enforces the `LLM_LOCK_FILE` kill switch. A cloud `OPENAI_BASE_URL` gets plain `fetch`, so requests go out exactly as the SDK builds them. Covered by `src/lib/local-model.test.ts`.
 
 ## Toolchain and environment quirks
 

@@ -23,7 +23,8 @@
 | Feature | Setting | Where |
 |---|---|---|
 | Chat Completions for any custom `OPENAI_BASE_URL` (llama-server has no Responses API) | automatic | `apps/api/src/lib/generic-ai.ts` |
-| Use the model the server already has loaded, instead of forcing a swap | automatic | `apps/api/src/lib/local-model.ts` |
+| Use whatever model llama-swap is running; load the default only when none is | `MODEL_NAME=default` + llama-swap `warm` selector | llama-swap `config.yaml` |
+| Cloud `OPENAI_BASE_URL`: send `MODEL_NAME` as-is, no llama.cpp fields | automatic | `generic-ai.ts`, `local-model.ts` |
 | Disable reasoning on chat requests | `LLM_DISABLE_THINKING=true` | `local-model.ts` |
 | Pin every chat request to one llama-server slot | `LLM_SLOT_ID=<n>` | `local-model.ts` |
 | Manual kill switch for all LLM calls | `LLM_LOCK_FILE=<path>` | `local-model.ts`, `docker-compose.yaml` |
@@ -31,13 +32,33 @@
 | `restart: unless-stopped` on all long-running services | automatic | `docker-compose.yaml` |
 
 All LLM-side behaviour lives in `localModelFetch` (`apps/api/src/lib/local-model.ts`), installed as the
-`fetch` of the OpenAI provider whenever `OPENAI_BASE_URL` is set. It rewrites each outgoing request body and
-never changes a field the caller already set. Unit tests: `apps/api/src/lib/local-model.test.ts`.
+`fetch` of the OpenAI provider whenever `OPENAI_BASE_URL` is local: loopback, a private or Tailscale IP
+(`10/8`, `172.16/12`, `192.168/16`, `100.64/10`), a single-label host (docker service name) or
+`*.local` / `*.lan` / `*.internal` (incl. `host.docker.internal`). It adds fields to chat bodies and never
+changes a field the caller already set, including `model`. Unit tests: `apps/api/src/lib/local-model.test.ts`.
 
-**Resident model.** llama-swap keeps one model loaded and swapping costs a full reload, so the `model` field
-is rewritten to: the loaded model → `MODEL_NAME` → the first model `GET $OPENAI_BASE_URL/models` lists → the
-caller's own name. The probe sends `OPENAI_API_KEY` as a Bearer token (llama-swap with `apiKeys` rejects it otherwise), is cached 30 s per process, and a failed probe is non-fatal (warns once:
-`Could not read loaded model from OPENAI_BASE_URL`).
+**Cloud model.** Any other `OPENAI_BASE_URL` (e.g. `https://openrouter.ai/api/v1`) is a cloud API: requests go
+out exactly as the SDK builds them, with `MODEL_NAME` as the model and none of `LLM_DISABLE_THINKING`,
+`LLM_SLOT_ID`, `LLM_LOCK_FILE`.
+
+**Resident model.** llama-swap keeps one model loaded and swapping costs a full reload, so Firecrawl does not
+pick the model at all: `MODEL_NAME=default` names a llama-swap selector with the `warm` strategy (llama-swap
+v241+), declared in llama-swap's `config.yaml`:
+
+```yaml
+selectors:
+  default:
+    strategy: warm
+    targets:
+      - swift15-27b   # loaded when nothing is running
+      - qwen38-27b
+```
+
+Per request llama-swap serves a `ready` target, else a `starting` one, else loads `targets[0]`. A running
+model that is not listed in `targets` is swapped out for `targets[0]`, so add every model Firecrawl may share
+to the list. Other clients can use `default` too. Switching models is unchanged: any client that names a
+concrete model makes llama-swap swap (after the current model's in-flight requests finish), and Firecrawl's
+next request follows.
 
 **`LLM_DISABLE_THINKING=true`** adds `chat_template_kwargs.enable_thinking: false` to chat bodies, so a
 reasoning model does not spend the whole budget on `reasoning_content` and return empty `content`.
@@ -66,8 +87,8 @@ single-file bind mount would not follow the file being created and deleted).
 
 ```bash
 OPENAI_BASE_URL=http://192.168.1.100:8081/v1   # host LAN IP; host.docker.internal is not reachable on this host
-OPENAI_API_KEY=<llama-swap apiKeys key>       # sent on chat calls and on the /models probe
-MODEL_NAME=swift15-27b                          # cold-start default, must match a llama-swap config.yaml key
+OPENAI_API_KEY=<llama-swap apiKeys key>       # sent on chat calls
+MODEL_NAME=default                              # llama-swap `warm` selector (see Resident model)
 LLM_DISABLE_THINKING=true
 LLM_SLOT_ID=1
 LLM_LOCK_FILE=/llm-lock/llm.lock
@@ -122,7 +143,7 @@ journalctl -u llama-swap -o cat | grep 'selected slot'
 # -> slot get_availabl: id  1 | task -1 | selected slot by id (1)
 ```
 
-Run the fork's unit tests (18 tests). On this host `pnpm exec`/`pnpm test` first try to reinstall
+Run the fork's unit tests (34 tests). On this host `pnpm exec`/`pnpm test` first try to reinstall
 dependencies and fail building the native `foundationdb` module without its client headers, so call the
 installed vitest directly:
 

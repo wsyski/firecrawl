@@ -6,48 +6,28 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../config", () => ({
   config: {
     OPENAI_BASE_URL: "http://llama-swap.test:8081/v1",
-    MODEL_NAME: "fallback-model",
+    MODEL_NAME: "default",
   },
 }));
 
 import { config } from "../config";
-import {
-  __resetLocalModelCacheForTests,
-  localModelFetch,
-} from "./local-model";
+import { isLocalLlmUrl, localModelFetch } from "./local-model";
 
 const CHAT_URL = "http://llama-swap.test:8081/v1/chat/completions";
+const EMBEDDINGS_URL = "http://llama-swap.test:8081/v1/embeddings";
 
-function modelsBody(loaded: string | null) {
-  return {
-    data: [
-      { id: "model-a", status: { value: "unloaded" } },
-      {
-        id: "model-b",
-        status: { value: loaded === "model-b" ? "loaded" : "unloaded" },
-      },
-    ],
-  };
-}
-
-function stubFetch(loaded: string | null) {
+function stubFetch() {
   const fetchMock = vi.fn(async (input: any, init?: any) => ({
     ok: true,
-    json: async () =>
-      String(input).endsWith("/models") ? modelsBody(loaded) : {},
+    json: async () => ({}),
   }));
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
 
-function sentModel(fetchMock: any) {
-  return JSON.parse(chatCall(fetchMock)[1].body).model;
-}
-
-function chatCall(fetchMock: any): any[] {
-  return fetchMock.mock.calls.find(
-    ([input]: any[]) => !String(input).endsWith("/models"),
-  );
+function sentBody(fetchMock: any) {
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  return JSON.parse(fetchMock.mock.calls[0][1].body);
 }
 
 async function chat(body: unknown) {
@@ -59,69 +39,40 @@ async function chat(body: unknown) {
 
 describe("localModelFetch", () => {
   beforeEach(() => {
-    __resetLocalModelCacheForTests();
     vi.restoreAllMocks();
-    config.MODEL_NAME = "fallback-model";
+    config.MODEL_NAME = "default";
     config.LLM_DISABLE_THINKING = undefined;
     config.LLM_SLOT_ID = undefined;
     config.LLM_LOCK_FILE = undefined;
     config.OPENAI_API_KEY = undefined;
   });
 
-  it("rewrites the request to the model the server has loaded", async () => {
-    const fetchMock = stubFetch("model-b");
-    await chat({ model: "gpt-4o-mini", messages: [] });
-    expect(sentModel(fetchMock)).toBe("model-b");
+  // llama-swap's `warm` selector picks the model, so Firecrawl never asks
+  // what is loaded and never renames the model.
+  it("sends the request unchanged, with no extra request", async () => {
+    const fetchMock = stubFetch();
+    const init = {
+      method: "POST",
+      body: JSON.stringify({ model: "default", messages: [] }),
+    };
+    await localModelFetch(CHAT_URL, init);
+    expect(fetchMock.mock.calls).toEqual([[CHAT_URL, init]]);
   });
 
-  it("keeps the rest of the body intact when rewriting", async () => {
-    const fetchMock = stubFetch("model-b");
-    await chat({ model: "gpt-4o-mini", messages: [{ role: "user" }] });
-    const call = chatCall(fetchMock);
-    expect(JSON.parse(call[1].body).messages).toEqual([{ role: "user" }]);
-    expect(call[1].method).toBe("POST");
+  it("keeps the model and the rest of the body when adding fields", async () => {
+    config.LLM_SLOT_ID = 1;
+    config.LLM_DISABLE_THINKING = true;
+    const fetchMock = stubFetch();
+    await chat({ model: "default", messages: [{ role: "user" }] });
+    const sent = sentBody(fetchMock);
+    expect(sent.model).toBe("default");
+    expect(sent.messages).toEqual([{ role: "user" }]);
+    expect(fetchMock.mock.calls[0][1].method).toBe("POST");
   });
 
-  it("falls back to MODEL_NAME when nothing is loaded", async () => {
-    const fetchMock = stubFetch(null);
-    await chat({ model: "gpt-4o-mini", messages: [] });
-    expect(sentModel(fetchMock)).toBe("fallback-model");
-  });
-
-  it("falls back to the first model listed when MODEL_NAME is unset", async () => {
-    config.MODEL_NAME = undefined;
-    const fetchMock = stubFetch(null);
-    await chat({ model: "gpt-4o-mini", messages: [] });
-    expect(sentModel(fetchMock)).toBe("model-a");
-  });
-
-  it("leaves the request untouched when the probe fails", async () => {
-    const fetchMock = vi.fn(async (input: any, init?: any) => {
-      if (String(input).endsWith("/models")) throw new Error("ECONNREFUSED");
-      return { ok: true, json: async () => ({}) };
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    config.MODEL_NAME = undefined;
-    await chat({ model: "gpt-4o-mini", messages: [] });
-    expect(sentModel(fetchMock)).toBe("gpt-4o-mini");
-  });
-
-  it("probes once per TTL window across concurrent requests", async () => {
-    const fetchMock = stubFetch("model-b");
-    await Promise.all([
-      chat({ model: "gpt-4o-mini", messages: [] }),
-      chat({ model: "gpt-4o-mini", messages: [] }),
-      chat({ model: "gpt-4o-mini", messages: [] }),
-    ]);
-    const probes = fetchMock.mock.calls.filter(([input]: any[]) =>
-      String(input).endsWith("/models"),
-    );
-    expect(probes).toHaveLength(1);
-  });
-
-  it("passes through requests that carry no model field", async () => {
-    const fetchMock = stubFetch("model-b");
-    await localModelFetch("http://llama-swap.test:8081/v1/embeddings", {
+  it("passes through non-chat bodies", async () => {
+    const fetchMock = stubFetch();
+    await localModelFetch(EMBEDDINGS_URL, {
       method: "POST",
       body: JSON.stringify({ input: "x" }),
     });
@@ -129,90 +80,71 @@ describe("localModelFetch", () => {
   });
 
   it("passes through requests whose body is not a string", async () => {
-    const fetchMock = stubFetch("model-b");
+    const fetchMock = stubFetch();
     await localModelFetch(CHAT_URL, { method: "GET" });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("injects enable_thinking=false on chat bodies when LLM_DISABLE_THINKING", async () => {
     config.LLM_DISABLE_THINKING = true;
-    const fetchMock = stubFetch("model-b");
-    await chat({ model: "gpt-4o-mini", messages: [{ role: "user" }] });
-    const sent = JSON.parse(chatCall(fetchMock)[1].body);
+    const fetchMock = stubFetch();
+    await chat({ model: "default", messages: [{ role: "user" }] });
+    const sent = sentBody(fetchMock);
     expect(sent.chat_template_kwargs).toEqual({ enable_thinking: false });
-    expect(sent.model).toBe("model-b");
+    expect(sent.model).toBe("default");
   });
 
   it("lets a caller-provided enable_thinking win", async () => {
     config.LLM_DISABLE_THINKING = true;
-    const fetchMock = stubFetch("model-b");
+    const fetchMock = stubFetch();
     await chat({
-      model: "gpt-4o-mini",
+      model: "default",
       messages: [{ role: "user" }],
       chat_template_kwargs: { enable_thinking: true },
     });
-    expect(
-      JSON.parse(chatCall(fetchMock)[1].body).chat_template_kwargs,
-    ).toEqual({ enable_thinking: true });
+    expect(sentBody(fetchMock).chat_template_kwargs).toEqual({
+      enable_thinking: true,
+    });
   });
 
   it("does not touch non-chat bodies even when LLM_DISABLE_THINKING", async () => {
     config.LLM_DISABLE_THINKING = true;
-    const fetchMock = stubFetch("model-b");
-    await localModelFetch("http://llama-swap.test:8081/v1/embeddings", {
+    const fetchMock = stubFetch();
+    await localModelFetch(EMBEDDINGS_URL, {
       method: "POST",
       body: JSON.stringify({ input: "x" }),
     });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(sentBody(fetchMock).chat_template_kwargs).toBeUndefined();
   });
 
   it("leaves chat bodies untouched when LLM_DISABLE_THINKING is unset", async () => {
-    const fetchMock = stubFetch("model-b");
-    await chat({ model: "model-b", messages: [{ role: "user" }] });
-    const sent = JSON.parse(chatCall(fetchMock)[1].body);
-    expect(sent.chat_template_kwargs).toBeUndefined();
+    const fetchMock = stubFetch();
+    await chat({ model: "default", messages: [{ role: "user" }] });
+    expect(sentBody(fetchMock).chat_template_kwargs).toBeUndefined();
   });
+
   it("pins chat bodies to LLM_SLOT_ID", async () => {
     config.LLM_SLOT_ID = 2;
-    const fetchMock = stubFetch("model-b");
-    await chat({ model: "model-b", messages: [{ role: "user" }] });
-    expect(JSON.parse(chatCall(fetchMock)[1].body).id_slot).toBe(2);
+    const fetchMock = stubFetch();
+    await chat({ model: "default", messages: [{ role: "user" }] });
+    expect(sentBody(fetchMock).id_slot).toBe(2);
   });
 
   it("lets a caller-provided id_slot win", async () => {
     config.LLM_SLOT_ID = 2;
-    const fetchMock = stubFetch("model-b");
-    await chat({ model: "model-b", messages: [{ role: "user" }], id_slot: 0 });
-    expect(JSON.parse(chatCall(fetchMock)[1].body).id_slot).toBe(0);
+    const fetchMock = stubFetch();
+    await chat({ model: "default", messages: [{ role: "user" }], id_slot: 0 });
+    expect(sentBody(fetchMock).id_slot).toBe(0);
   });
 
   it("does not pin non-chat bodies", async () => {
     config.LLM_SLOT_ID = 2;
-    const fetchMock = stubFetch("model-b");
-    await localModelFetch("http://llama-swap.test:8081/v1/embeddings", {
+    const fetchMock = stubFetch();
+    await localModelFetch(EMBEDDINGS_URL, {
       method: "POST",
       body: JSON.stringify({ input: "x" }),
     });
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body).id_slot).toBeUndefined();
-  });
-
-  it("sends OPENAI_API_KEY on the model probe", async () => {
-    config.OPENAI_API_KEY = "sk-test";
-    const fetchMock = stubFetch("model-b");
-    await chat({ model: "gpt-4o-mini", messages: [] });
-    const probeCall = fetchMock.mock.calls.find(([input]: any[]) =>
-      String(input).endsWith("/models"),
-    );
-    expect(probeCall?.[1]?.headers).toEqual({ Authorization: "Bearer sk-test" });
-  });
-
-  it("sends no Authorization on the probe without OPENAI_API_KEY", async () => {
-    const fetchMock = stubFetch("model-b");
-    await chat({ model: "gpt-4o-mini", messages: [] });
-    const probeCall = fetchMock.mock.calls.find(([input]: any[]) =>
-      String(input).endsWith("/models"),
-    );
-    expect(probeCall?.[1]?.headers).toBeUndefined();
+    expect(sentBody(fetchMock).id_slot).toBeUndefined();
   });
 
   describe("LLM_LOCK_FILE", () => {
@@ -225,8 +157,8 @@ describe("localModelFetch", () => {
     it("fails like an unreachable server while the lock file exists", async () => {
       config.LLM_LOCK_FILE = join(dir, "llm.lock");
       writeFileSync(config.LLM_LOCK_FILE, "");
-      const fetchMock = stubFetch("model-b");
-      const err = await chat({ model: "model-b", messages: [] }).catch(e => e);
+      const fetchMock = stubFetch();
+      const err = await chat({ model: "default", messages: [] }).catch(e => e);
       expect(err).toBeInstanceOf(TypeError);
       expect(err.message).toBe("fetch failed");
       expect(err.cause.code).toBe("ECONNREFUSED");
@@ -237,9 +169,9 @@ describe("localModelFetch", () => {
     it("blocks non-chat bodies too, as an outage would", async () => {
       config.LLM_LOCK_FILE = join(dir, "llm.lock");
       writeFileSync(config.LLM_LOCK_FILE, "");
-      const fetchMock = stubFetch("model-b");
+      const fetchMock = stubFetch();
       await expect(
-        localModelFetch("http://llama-swap.test:8081/v1/embeddings", {
+        localModelFetch(EMBEDDINGS_URL, {
           method: "POST",
           body: JSON.stringify({ input: "x" }),
         }),
@@ -249,9 +181,41 @@ describe("localModelFetch", () => {
 
     it("passes through when the lock file is absent", async () => {
       config.LLM_LOCK_FILE = join(dir, "llm.lock");
-      const fetchMock = stubFetch("model-b");
-      await chat({ model: "gpt-4o-mini", messages: [] });
-      expect(sentModel(fetchMock)).toBe("model-b");
+      const fetchMock = stubFetch();
+      await chat({ model: "default", messages: [] });
+      expect(sentBody(fetchMock).model).toBe("default");
     });
+  });
+});
+
+describe("isLocalLlmUrl", () => {
+  it.each([
+    "http://192.168.1.100:8081/v1",
+    "http://10.0.0.5:8080/v1",
+    "http://172.20.0.3:8080/v1",
+    "http://127.0.0.1:8081/v1",
+    "http://100.101.102.103:8081/v1",
+    "http://localhost:8081/v1",
+    "http://host.docker.internal:8081/v1",
+    "http://llama-swap:8080/v1",
+    "http://zeus.local:8081/v1",
+    "http://zeus.lan:8081/v1",
+    "http://[::1]:8081/v1",
+    "http://[fd12:3456::1]:8081/v1",
+  ])("treats %s as local", url => {
+    expect(isLocalLlmUrl(url)).toBe(true);
+  });
+
+  it.each([
+    "https://api.openai.com/v1",
+    "https://openrouter.ai/api/v1",
+    "https://api.deepseek.com/v1",
+    "http://8.8.8.8/v1",
+    "http://172.32.0.1/v1",
+    "not a url",
+    "",
+    undefined,
+  ])("treats %s as cloud", url => {
+    expect(isLocalLlmUrl(url)).toBe(false);
   });
 });

@@ -1,61 +1,41 @@
 import { existsSync } from "node:fs";
+import { isIP } from "node:net";
 import { config } from "../config";
-import { logger } from "./logger";
 
-const PROBE_TTL_MS = 30_000;
-const PROBE_TIMEOUT_MS = 5_000;
-
-let loadedModel: string | undefined;
-let firstConfiguredModel: string | undefined;
-let probedAt = 0;
-let inFlight: Promise<void> | undefined;
-let warned = false;
-
-async function probe(): Promise<void> {
+// OPENAI_BASE_URL on this machine, the LAN or the tailnet is llama-swap;
+// anything else is a cloud API, which gets MODEL_NAME as-is and none of the
+// llama.cpp-specific handling below.
+export function isLocalLlmUrl(url: string | undefined): boolean {
+  if (!url) return false;
+  let host: string;
   try {
-    const res = await fetch(`${config.OPENAI_BASE_URL}/models`, {
-      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
-      ...(config.OPENAI_API_KEY && {
-        headers: { Authorization: `Bearer ${config.OPENAI_API_KEY}` },
-      }),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const body = (await res.json()) as {
-      data?: { id?: string; status?: { value?: string } }[];
-    };
-    const models = body.data ?? [];
-    loadedModel = models.find(m => m.status?.value === "loaded")?.id;
-    firstConfiguredModel = models[0]?.id;
-    warned = false;
-  } catch (error) {
-    loadedModel = undefined;
-    firstConfiguredModel = undefined;
-    if (!warned) {
-      warned = true;
-      logger.warn("Could not read loaded model from OPENAI_BASE_URL", {
-        error,
-      });
-    }
-  } finally {
-    probedAt = Date.now();
+    host = new URL(url).hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  } catch {
+    return false;
   }
+  if (isIP(host) === 4) {
+    const [a, b] = host.split(".").map(Number);
+    return (
+      a === 127 ||
+      a === 10 ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      (a === 169 && b === 254) ||
+      (a === 100 && b >= 64 && b <= 127)
+    );
+  }
+  if (isIP(host) === 6) {
+    return host === "::1" || /^f[cd]/.test(host) || /^fe[89ab]/.test(host);
+  }
+  return (
+    !host.includes(".") || // docker service name, e.g. "llama-swap"
+    /\.(localhost|local|lan|internal|home\.arpa)$/.test(host)
+  );
 }
 
-async function currentModelId(): Promise<string | undefined> {
-  if (Date.now() - probedAt >= PROBE_TTL_MS) {
-    inFlight ??= probe().finally(() => {
-      inFlight = undefined;
-    });
-    await inFlight;
-  }
-  return loadedModel ?? config.MODEL_NAME ?? firstConfiguredModel;
-}
-
-// Servers that swap models on demand (llama-swap) keep one model resident, and
-// naming a different one costs a full reload from disk — so the model is picked
-// here, at request time, where the answer can be awaited. A cached answer read
-// synchronously at getModel() time is always one request stale, which is
-// exactly when the swap happens.
+// Model choice is llama-swap's, not Firecrawl's: MODEL_NAME names a `warm`
+// selector (e.g. "default") that serves whatever model is already running and
+// loads its first target only when none is. The `model` field goes out as-is.
 export const localModelFetch: typeof fetch = async (input, init) => {
   // Manual kill switch: while the lock file exists (bind-mounted from the
   // host), fail exactly like an unreachable server so the existing outage
@@ -70,7 +50,6 @@ export const localModelFetch: typeof fetch = async (input, init) => {
   }
   if (typeof init?.body !== "string") return fetch(input, init);
   let body: {
-    model?: unknown;
     messages?: unknown;
     chat_template_kwargs?: Record<string, unknown>;
     id_slot?: unknown;
@@ -87,11 +66,8 @@ export const localModelFetch: typeof fetch = async (input, init) => {
   // slot queues the request instead of taking another one.
   const pinSlot =
     isChat && config.LLM_SLOT_ID !== undefined && body.id_slot === undefined;
-  if (typeof body.model !== "string" && !disableThinking && !pinSlot)
-    return fetch(input, init);
-  const model = (await currentModelId()) ?? body.model;
+  if (!disableThinking && !pinSlot) return fetch(input, init);
   const next: Record<string, unknown> = { ...body };
-  if (typeof model === "string" && model !== body.model) next.model = model;
   // Thinking models (e.g. Nex-N2.5 templates) can spend the whole
   // budget on reasoning_content, leaving `content` empty. Only chat bodies;
   // a caller-provided value wins.
@@ -102,19 +78,5 @@ export const localModelFetch: typeof fetch = async (input, init) => {
     };
   }
   if (pinSlot) next.id_slot = config.LLM_SLOT_ID;
-  if (
-    next.model === body.model &&
-    next.chat_template_kwargs === body.chat_template_kwargs &&
-    next.id_slot === body.id_slot
-  )
-    return fetch(input, init);
   return fetch(input, { ...init, body: JSON.stringify(next) });
 };
-
-export function __resetLocalModelCacheForTests(): void {
-  loadedModel = undefined;
-  firstConfiguredModel = undefined;
-  probedAt = 0;
-  inFlight = undefined;
-  warned = false;
-}
