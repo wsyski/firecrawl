@@ -96,6 +96,7 @@ x-common-env: &common-env
   SEARXNG_ENDPOINT: ${SEARXNG_ENDPOINT}
   SEARXNG_ENGINES: ${SEARXNG_ENGINES}
   SEARXNG_CATEGORIES: ${SEARXNG_CATEGORIES}
+  SEARXNG_NEWS_CATEGORIES: ${SEARXNG_NEWS_CATEGORIES}
   # Set NUQ_BACKEND=fdb to run the queue on FoundationDB instead of Postgres.
   # The foundationdb/foundationdb-init services were removed from this fork (unused:
   # NUQ_BACKEND is unset, so nuq-postgres is the active backend). Re-add them, plus

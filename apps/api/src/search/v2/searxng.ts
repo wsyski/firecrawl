@@ -17,11 +17,12 @@ interface SearchOptions {
 
 // SEARXNG_ENGINES/SEARXNG_CATEGORIES pin the web search only: an engine pin like
 // "yahoo,mwmbl" would leave the news and images categories with no engine to run.
-const categoryOf: Record<SearchResultType, string | undefined> = {
-  web: undefined,
-  news: "news",
-  images: "images",
-};
+const categoryOf = (type: SearchResultType): string | undefined =>
+  type === "news"
+    ? config.SEARXNG_NEWS_CATEGORIES || "news"
+    : type === "images"
+      ? "images"
+      : undefined;
 
 const mappers: Record<SearchResultType, (a: any) => any> = {
   web: a => ({ url: a.url, title: a.title, description: a.content }),
@@ -50,7 +51,7 @@ export async function searxng_search(
     type: SearchResultType,
     page: number,
   ): Promise<any[]> => {
-    const category = categoryOf[type];
+    const category = categoryOf(type);
     const params = {
       q: q,
       language: options.lang,

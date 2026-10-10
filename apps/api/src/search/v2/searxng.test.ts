@@ -7,6 +7,7 @@ vi.mock("../../config", () => ({
     SEARXNG_ENDPOINT: "http://sx:3003",
     SEARXNG_ENGINES: "yahoo,mwmbl",
     SEARXNG_CATEGORIES: "general",
+    SEARXNG_NEWS_CATEGORIES: undefined as string | undefined,
   },
 }));
 vi.mock("../../lib/logger", () => ({
@@ -14,6 +15,7 @@ vi.mock("../../lib/logger", () => ({
 }));
 
 import { searxng_search } from "./searxng";
+import { config } from "../../config";
 
 const get = vi.mocked(axios.get);
 
@@ -58,6 +60,16 @@ describe("searxng_search source types", () => {
     expect(r).toEqual({
       news: [{ url: "https://n/1", title: "N1", snippet: "news snippet", date: "2026-10-10T12:00:00" }],
     });
+  });
+
+  it("SEARXNG_NEWS_CATEGORIES replaces the news category", async () => {
+    config.SEARXNG_NEWS_CATEGORIES = "news,science";
+    try {
+      await searxng_search("q", { num_results: 5, type: "news" });
+      expect(get.mock.calls[0][1]!.params).toMatchObject({ engines: "", categories: "news,science" });
+    } finally {
+      config.SEARXNG_NEWS_CATEGORIES = undefined;
+    }
   });
 
   it("images map img_src to imageUrl", async () => {

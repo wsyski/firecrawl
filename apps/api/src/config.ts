@@ -409,6 +409,7 @@ const configSchema = z.object({
   SEARXNG_ENDPOINT: z.string().optional(),
   SEARXNG_ENGINES: z.string().optional(),
   SEARXNG_CATEGORIES: z.string().optional(),
+  SEARXNG_NEWS_CATEGORIES: z.string().optional(),
   SEARCH_SERVICE_URL: z.string().optional(),
   SEARCH_INDEX_SAMPLE_RATE: z.coerce.number().default(0.1),
   ENABLE_SEARCH_INDEX: z.stringbool().optional(),
