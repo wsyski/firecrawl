@@ -14,6 +14,7 @@ import { ScrapeJobData } from "../../types";
 import { includesFormat } from "../../lib/format-utils";
 import { normalizeMonitorFormats } from "./diff";
 import { autumnService } from "../autumn/autumn.service";
+import { ExistingCreditsLockError } from "../autumn/types";
 import { getBillingQueue } from "../queue-service";
 import {
   crawlToCrawler,
@@ -33,6 +34,7 @@ import { createWebhookSender, WebhookEvent } from "../webhook";
 import { sendMonitorPageWebhook } from "./results";
 import { sendMonitoringEmailSummary } from "../notification/monitoring_email";
 import { sendMonitoringSlackSummary } from "../notification/monitoring_slack";
+import { recordMonitorInAppNotification } from "../notification/monitoring_in_app";
 import {
   bulkUpsertMonitorPages,
   calculateMonitorCheckActualCredits,
@@ -71,6 +73,7 @@ import {
 import { trackMonitorCheckStartedInterest } from "./interest";
 import { runSearchTarget, type ScrapeSearchResult } from "./search/run";
 import { verdictJsonSchema } from "./search/judge";
+import { monitorTelemetryMetadata } from "./search/tuning";
 import { computeGoalVersion } from "./search/dedupe";
 import { isUrlBlocked } from "../../scraper/WebScraper/utils/blocklist";
 import { getACUCTeam } from "../../controllers/auth";
@@ -274,6 +277,7 @@ export function estimateActualCredits(doc: any, options?: any): number {
 async function scrapeSearchMonitorPage(params: {
   teamId: string;
   teamFlags: TeamFlags | null;
+  monitorId: string;
   checkId: string;
   url: string;
   judgePrompt: string;
@@ -321,6 +325,15 @@ async function scrapeSearchMonitorPage(params: {
         zeroDataRetention: false,
         // Safe Mode resolves per-URL at the scrapeURL backstop from these flags.
         teamFlags: params.teamFlags ?? undefined,
+        // The JSON format is the search judge; trace it as part of the check.
+        llmTelemetry: {
+          functionId: "monitor/searchJudge",
+          metadata: monitorTelemetryMetadata("monitor_search_judge", {
+            teamId: params.teamId,
+            monitorId: params.monitorId,
+            monitorCheckId: params.checkId,
+          }),
+        },
       },
       skipNuq: true,
       origin: "monitor",
@@ -439,13 +452,31 @@ async function sendNotifications(params: {
   monitor: MonitorRow;
   check: MonitorCheckRow;
   pages: PageResult[];
-}): Promise<{ webhook?: unknown; email?: unknown; slack?: unknown }> {
+}): Promise<{
+  webhook?: unknown;
+  email?: unknown;
+  slack?: unknown;
+  inApp?: unknown;
+}> {
   const payload = {
     monitorId: params.monitor.id,
     checkId: params.check.id,
     status: params.check.status,
     summary: toSummaryObject(params.check),
   };
+
+  const nonSamePages = params.pages.filter(page => page.status !== "same");
+
+  // Never throws, and goes first so a failing channel below cannot skip it.
+  const inAppStatus = await recordMonitorInAppNotification({
+    monitor: params.monitor,
+    check: params.check,
+    pages: nonSamePages.map(page => ({
+      url: page.url,
+      status: page.status,
+      judgment: page.judgment ?? null,
+    })),
+  });
 
   let webhookStatus: unknown = { attempted: false };
   if (params.monitor.webhook) {
@@ -479,7 +510,6 @@ async function sendNotifications(params: {
     }
   }
 
-  const nonSamePages = params.pages.filter(page => page.status !== "same");
   // Pull diff text for up to 5 meaningful changed pages so the email leads with
   // the diff. Errors swallowed per-page so one GCS hiccup doesn't drop the alert.
   const diffEligible = nonSamePages
@@ -547,6 +577,7 @@ async function sendNotifications(params: {
     webhook: webhookStatus,
     email: emailStatus,
     slack: slackStatus,
+    inApp: inAppStatus,
   };
 }
 
@@ -842,6 +873,7 @@ async function runMonitorSearchTarget(params: {
       scrapeSearchMonitorPage({
         teamId: monitor.team_id,
         teamFlags,
+        monitorId: monitor.id,
         checkId: check.id,
         url,
         judgePrompt,
@@ -1009,35 +1041,27 @@ export async function processMonitorCheckJob(
     return;
   }
 
-  const started = await updateMonitorCheckIfStatus(
-    job.checkId,
-    initialCheck.status,
-    {
-      status: "running",
-      started_at: new Date().toISOString(),
-    },
-  );
+  const started =
+    initialCheck.status === "running"
+      ? initialCheck
+      : await updateMonitorCheckIfStatus(job.checkId, "queued", {
+          status: "running",
+          started_at: new Date().toISOString(),
+        });
   if (!started) return;
   let check: MonitorCheckRow = started;
-
-  await markMonitorRunning({
-    monitorId: monitor.id,
-    checkId: job.checkId,
-  });
-
-  trackMonitorCheckStartedInterest({ monitor, check }).catch(error =>
-    logger.warn("Failed to track monitor target interest", {
-      error,
-      monitorId: monitor.id,
-      checkId: check.id,
-      eventType: "check_started",
-    }),
-  );
 
   // One org lookup for the whole check job — the billing service no longer
   // makes it, so every hold, settle and release below shares this one. A
   // failure answers null, which is what the lookup inside the biller did.
   const orgId = await orgIdForTeam(monitor.team_id);
+  const admissionCheck = await getMonitorCheckForUpdate(
+    job.teamId,
+    job.monitorId,
+    job.checkId,
+  );
+  if (!admissionCheck || admissionCheck.status !== "running") return;
+  check = admissionCheck;
   const partnerJobToken = check.partner_run_token
     ? null
     : monitor.partner_job_token;
@@ -1138,6 +1162,20 @@ export async function processMonitorCheckJob(
     }
     check = reserved;
 
+    await markMonitorRunning({
+      monitorId: monitor.id,
+      checkId: job.checkId,
+    });
+
+    trackMonitorCheckStartedInterest({ monitor, check }).catch(error =>
+      logger.warn("Failed to track monitor target interest", {
+        error,
+        monitorId: monitor.id,
+        checkId: check.id,
+        eventType: "check_started",
+      }),
+    );
+
     const targetResults = monitor.targets.map(createMonitorTargetRun);
     const initialized = await updateMonitorCheckIfRunning(check.id, {
       target_results: targetResults,
@@ -1199,6 +1237,7 @@ export async function processMonitorCheckJob(
       target_results: targetResults,
     });
   } catch (error) {
+    if (error instanceof ExistingCreditsLockError) throw error;
     // Atomically flip running -> failed. Returns null when the check already
     // reached a terminal status — i.e. the reconciler finalized it (completed,
     // billed, lock confirmed) before this late catch ran. In that case we must
