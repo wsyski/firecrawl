@@ -1,38 +1,36 @@
 #!/usr/bin/env bash
 # Run the Firecrawl integration collection against the local Docker stack.
 #
-# The committed Postman environment deliberately holds no secrets: every value
-# that also exists in .env is read from there and passed with --env-var, so .env
-# stays the single source of truth and nothing sensitive is ever committed.
+# Neither Postman file carries a credential: the collection and the environment
+# are committed, so openApiKey and bullAuthKey are injected at run time from the
+# same files Compose uses - .env.prod for the secrets, .env for the endpoint.
 #
 #   ./postman/run.sh                      # everything
 #   ./postman/run.sh --folder "Queue Admin (optional)"
 #
-# Override the env file with FIRECRAWL_ENV=/path/to/.env, or export the three
-# variables yourself; anything already exported wins.
+# Override with FIRECRAWL_ENV / FIRECRAWL_SECRETS, or export the values
+# yourself; anything already exported wins over the files.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 env_file="${FIRECRAWL_ENV:-$here/../.env}"
+secrets_file="${FIRECRAWL_SECRETS:-$here/../.env.prod}"
 
-if [[ ! -f "$env_file" ]]; then
-  echo "run.sh: no .env at $env_file (set FIRECRAWL_ENV)" >&2
-  exit 1
-fi
-
-# Read one key from .env without sourcing the file, and strip optional quotes.
-from_env() {
-  local v
-  v="$(sed -n "s/^$1=//p" "$env_file" | head -n1)"
+# Read one key from a file without sourcing it, stripping optional quotes.
+# Missing file or missing key yields empty, which is checked below.
+from_file() {
+  local file="$1" key="$2" v
+  [[ -f "$file" ]] || return 0
+  v="$(sed -n "s/^$key=//p" "$file" | head -n1)"
   v="${v%\"}"; v="${v#\"}"
   printf '%s' "$v"
 }
 
-OPENAI_API_KEY="${OPENAI_API_KEY:-$(from_env OPENAI_API_KEY)}"
-BULL_AUTH_KEY="${BULL_AUTH_KEY:-$(from_env BULL_AUTH_KEY)}"
-OPENAI_BASE_URL="${OPENAI_BASE_URL:-$(from_env OPENAI_BASE_URL)}"
+OPENAI_API_KEY="${OPENAI_API_KEY:-$(from_file "$secrets_file" OPENAI_API_KEY)}"
+BULL_AUTH_KEY="${BULL_AUTH_KEY:-$(from_file "$secrets_file" BULL_AUTH_KEY)}"
+OPENAI_BASE_URL="${OPENAI_BASE_URL:-$(from_file "$env_file" OPENAI_BASE_URL)}"
 
-# llama-swap is reachable directly, so strip the /v1 that the OpenAI SDK expects.
+# llama-swap is reachable directly, so drop the /v1 the OpenAI SDK appends.
 openApiUrl="${openApiUrl:-${OPENAI_BASE_URL%/v1}}"
 
 missing=()
@@ -40,8 +38,9 @@ missing=()
 [[ -n "$BULL_AUTH_KEY"  ]] || missing+=(BULL_AUTH_KEY)
 [[ -n "$openApiUrl"     ]] || missing+=(OPENAI_BASE_URL)
 if (( ${#missing[@]} )); then
-  echo "run.sh: empty in $env_file -> ${missing[*]}" >&2
-  echo "       only the Queue Admin and Open APi folders need them." >&2
+  echo "run.sh: empty -> ${missing[*]}" >&2
+  echo "       secrets come from $secrets_file, the endpoint from $env_file." >&2
+  echo "       Note a shell export of the same name overrides both." >&2
   exit 1
 fi
 
