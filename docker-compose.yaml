@@ -177,7 +177,14 @@ services:
     # Search provider for /v2/search. Firecrawl's chain is fire-engine ->
     # searxng -> DuckDuckGo (src/search/v2/index.ts), so this only has to
     # return results; anything it misses still falls through to DuckDuckGo.
-    # No published port on purpose: an open SearXNG on the LAN is an open proxy.
+    # Reachable on the LAN, like llama-swap on 192.168.1.100:8081, so host-level
+    # consumers (Hermes) can use it without going through Firecrawl. SEARXNG_BIND
+    # is the address to publish on; it defaults to loopback, which keeps SearXNG
+    # private. Note SearXNG has no authentication: anything that can reach this
+    # address can search through it, so binding the LAN address makes this
+    # machine an open metasearch proxy for the network.
+    ports:
+      - "${SEARXNG_BIND:-127.0.0.1}:9003:9003"
     # Pinned by digest, not :latest. A SearXNG release that changes the settings
     # schema can stop honouring `formats: [html, json]`, and the symptom is 200
     # responses with no results array - which reads as "search is broken" rather
