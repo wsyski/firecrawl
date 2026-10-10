@@ -30,6 +30,8 @@
 | Manual kill switch for all LLM calls | `LLM_LOCK_FILE=<path>` | `local-model.ts`, `docker-compose.yaml` |
 | 10-minute timeouts for JSON/extract requests (slow local models) | automatic | `apps/api/src/controllers/v1/types.ts` |
 | `restart: unless-stopped` on all long-running services | automatic | `docker-compose.yaml` |
+| Search via a local SearXNG instead of rate-limited DuckDuckGo | `SEARXNG_ENDPOINT=http://searxng:9003` | `docker-compose.yaml`, `searxng/settings.yml` |
+| Safe-search results filtered by Jev (TypeSafe) | `TYPESAFE_API_KEY`, `TYPESAFE_BASE_URL`, `TYPESAFE_MODEL` | `apps/api/src/lib/typesafe.ts` |
 
 All LLM-side behaviour lives in `localModelFetch` (`apps/api/src/lib/local-model.ts`), installed as the
 `fetch` of the OpenAI provider whenever `OPENAI_BASE_URL` is local: loopback, a private or Tailscale IP
@@ -96,6 +98,66 @@ LOGGING_LEVEL=info                             # the default "debug" dumps every
 ```
 
 The model server must listen on all interfaces, not only localhost, or the containers cannot reach it.
+
+#### Search (SearXNG)
+
+`/v2/search` tries fire-engine → SearXNG → DuckDuckGo (`apps/api/src/search/v2/index.ts`). Only
+DuckDuckGo is reachable here, and it rate-limits hard enough to be unusable. Measured over 8 repeats
+per query against this stack:
+
+| Query | DuckDuckGo only | with SearXNG |
+|---|---|---|
+| `react documentation` | 2/8 | 8/8 |
+| `open source web scraping tools` | 0/8 | 8/8 |
+
+SearXNG runs as a container on the private `backend` network with **no published port** — an open
+SearXNG on the LAN is an open proxy. Only `api` can reach it.
+
+```bash
+SEARXNG_ENDPOINT=http://searxng:9003   # in .env
+```
+
+Three places have to agree on the port, and the first one is the one that actually matters:
+
+| Where | Setting |
+|---|---|
+| `docker-compose.yaml` | `SEARXNG_PORT=9003` ← the image maps this to `GRANIAN_PORT`, and granian is what binds |
+| `docker-compose.yaml` | `SEARXNG_BASE_URL=http://localhost:9003/` (absolute result links) |
+| `searxng/settings.yml` | `server.port: 9003` (consistency; ignored by the image) |
+| `.env` | `SEARXNG_ENDPOINT=http://searxng:9003` |
+
+`searxng/settings.yml` must keep `formats: [html, json]` under `search:`. Firecrawl calls
+`/search?format=json`, and a default instance answers `200` with **no `results` array** — which looks
+like "search is broken" rather than a misconfiguration.
+
+The container chowns the bind-mounted `searxng/` directory to uid 100976, so edits need root inside
+the container:
+
+```bash
+docker compose exec -T -u root searxng sh -c "sed -i 's/…/…/' /etc/searxng/settings.yml"
+docker compose restart searxng
+```
+
+#### Safe search with Jev
+
+With `safe: true`, `/v2/search` asks Jev (TypeSafe) one `noul` question per result and drops anything
+scoring above 0.3 (`apps/api/src/search/safe-search.ts`). Jev is a System One decision model on
+`POST {TYPESAFE_BASE_URL}/systemone`, not a chat model, so it is reached through the TypeSafe SDK
+rather than the OpenAI provider.
+
+```bash
+TYPESAFE_API_KEY=<zen key>
+TYPESAFE_BASE_URL=https://opencode.ai/zen   # API root; the SDK appends /v1/systemone itself
+TYPESAFE_MODEL=jev-1.13                     # or jev-1.13-free
+TYPESAFE_INPUT_USD_PER_MTOK=0.042           # cost tracking only; 0 for a free tier
+```
+
+`TYPESAFE_BASE_URL` is the **host root** — a trailing `/v1` produces `/v1/v1/systemone` and a 404, so
+the SDK strips it defensively. These variables must be listed in `x-common-env` in
+`docker-compose.yaml` (they are); an unlisted variable silently never reaches the container.
+
+The safe filter is skipped for zero-data-retention requests, so a keyless ZDR search returns
+unfiltered results. Jev's other consumer, branding, needs `BRANDING_JEV=true` and is off by default.
 
 ```bash
 mkdir -p /opt/llm/lock                  # host directory for the lock file (mounted into the api container)

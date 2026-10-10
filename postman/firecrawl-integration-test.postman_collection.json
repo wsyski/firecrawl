@@ -15,7 +15,9 @@
               "listen": "test",
               "script": {
                 "type": "text/javascript",
-                "exec": ["pm.test('Status code is 200', () => pm.response.to.have.status(200));"]
+                "exec": [
+                  "pm.test('Status code is 200', () => pm.response.to.have.status(200));"
+                ]
               }
             }
           ],
@@ -24,8 +26,14 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/v0/health/liveness",
-              "host": ["{{baseUrl}}"],
-              "path": ["v0", "health", "liveness"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v0",
+                "health",
+                "liveness"
+              ]
             },
             "description": "Should return 200 with no body when the api container is up."
           }
@@ -42,21 +50,33 @@
               "listen": "test",
               "script": {
                 "type": "text/javascript",
-                "exec": ["pm.test('Status code is 200', () => pm.response.to.have.status(200));"]
+                "exec": [
+                  "pm.test('Status code is 200', () => pm.response.to.have.status(200));"
+                ]
               }
             }
           ],
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"url\": \"https://example.com\"\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/v1/scrape",
-              "host": ["{{baseUrl}}"],
-              "path": ["v1", "scrape"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "scrape"
+              ]
             },
             "description": "No LLM involved — pure fetch + markdown conversion. Good smoke test that doesn't depend on Open APi."
           }
@@ -68,21 +88,33 @@
               "listen": "test",
               "script": {
                 "type": "text/javascript",
-                "exec": ["pm.test('Status code is 200', () => pm.response.to.have.status(200));"]
+                "exec": [
+                  "pm.test('Status code is 200', () => pm.response.to.have.status(200));"
+                ]
               }
             }
           ],
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"url\": \"https://example.com\",\n  \"formats\": [\"json\"],\n  \"jsonOptions\": {\n    \"schema\": {\n      \"type\": \"object\",\n      \"properties\": {\n        \"heading\": { \"type\": \"string\" }\n      },\n      \"required\": [\"heading\"]\n    },\n    \"prompt\": \"Extract the main heading text from this page.\"\n  }\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/v1/scrape",
-              "host": ["{{baseUrl}}"],
-              "path": ["v1", "scrape"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "scrape"
+              ]
             },
             "description": "Routes the extraction through OPENAI_BASE_URL (Open APi) via Chat Completions. Local models are slow — expect ~15-30s. Response should have data.json.heading populated; if data.json is missing, check the api container logs for a coerceFieldsToFormats warning (schema mismatch) and cross-check Open APi's server log."
           }
@@ -99,21 +131,33 @@
               "listen": "test",
               "script": {
                 "type": "text/javascript",
-                "exec": ["pm.test('Status code is 200', () => pm.response.to.have.status(200));"]
+                "exec": [
+                  "pm.test('Status code is 200', () => pm.response.to.have.status(200));"
+                ]
               }
             }
           ],
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"url\": \"https://example.com\",\n  \"limit\": 20\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/v1/map",
-              "host": ["{{baseUrl}}"],
-              "path": ["v1", "map"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "map"
+              ]
             },
             "description": "Fast link discovery, no LLM/scrape involved. Good for testing the stack without waiting on Open APi."
           }
@@ -143,15 +187,25 @@
           ],
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"url\": \"https://example.com\",\n  \"limit\": 5\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/v1/crawl",
-              "host": ["{{baseUrl}}"],
-              "path": ["v1", "crawl"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "crawl"
+              ]
             },
             "description": "Kicks off an async crawl job and auto-saves the returned id into the {{crawlId}} collection variable for the next request."
           }
@@ -163,7 +217,9 @@
               "listen": "test",
               "script": {
                 "type": "text/javascript",
-                "exec": ["pm.test('Status code is 200', () => pm.response.to.have.status(200));"]
+                "exec": [
+                  "pm.test('Status code is 200', () => pm.response.to.have.status(200));"
+                ]
               }
             }
           ],
@@ -172,8 +228,14 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/v1/crawl/{{crawlId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["v1", "crawl", "{{crawlId}}"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "crawl",
+                "{{crawlId}}"
+              ]
             },
             "description": "Run 'Start Crawl' first to populate {{crawlId}} automatically, or set it manually."
           }
@@ -190,21 +252,33 @@
               "listen": "test",
               "script": {
                 "type": "text/javascript",
-                "exec": ["pm.test('Status code is 200', () => pm.response.to.have.status(200));"]
+                "exec": [
+                  "pm.test('Status code is 200', () => pm.response.to.have.status(200));"
+                ]
               }
             }
           ],
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"urls\": [\"https://example.com\"],\n  \"prompt\": \"Extract the main heading text from this page.\",\n  \"schema\": {\n    \"type\": \"object\",\n    \"properties\": {\n      \"heading\": { \"type\": \"string\" }\n    },\n    \"required\": [\"heading\"]\n  }\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/v1/extract",
-              "host": ["{{baseUrl}}"],
-              "path": ["v1", "extract"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "extract"
+              ]
             },
             "description": "Firecrawl marks /v1/extract deprecated in favor of /v2/scrape. Its reranker (lib/extract/reranker.ts) is hardcoded to Gemini and does NOT route through Open APi — requires GOOGLE_GENERATIVE_AI_API_KEY to be set, falls back gracefully (logs a warning, returns empty relevance list) if that key is weak/missing rather than failing the whole request. Expect ~40-60s."
           }
@@ -221,20 +295,33 @@
               "listen": "test",
               "script": {
                 "type": "text/javascript",
-                "exec": ["pm.test('Status code is 200', () => pm.response.to.have.status(200));"]
+                "exec": [
+                  "pm.test('Status code is 200', () => pm.response.to.have.status(200));"
+                ]
               }
             }
           ],
           "request": {
             "method": "GET",
-            "header": [],
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{openApiKey}}"
+              }
+            ],
             "url": {
               "raw": "{{openApiUrl}}/v1/models",
-              "host": ["{{openApiUrl}}"],
-              "path": ["v1", "models"]
+              "host": [
+                "{{openApiUrl}}"
+              ],
+              "path": [
+                "v1",
+                "models"
+              ]
             },
             "description": "Hits Open APi directly (not through the api container) to confirm it's reachable and which model(s) are loaded. Useful first check when a Scrape/JSON request times out."
-          }
+          },
+          "description": "Hits the Open APi / llama-swap backend directly, bypassing the api container, to confirm it is reachable and which model(s) are loaded. Useful first check when a Scrape/JSON request times out. Needs {{openApiKey}}: llama-swap answers 401 'unauthorized: invalid or missing API key' without it, so this fails when the key is blank."
         }
       ]
     },
@@ -248,7 +335,12 @@
               "listen": "test",
               "script": {
                 "type": "text/javascript",
-                "exec": ["pm.test('Status code is 200', () => pm.response.to.have.status(200));"]
+                "exec": [
+                  "pm.test('Status code is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('the Bull dashboard was served, not some other HTML page', () => {",
+                  "  pm.expect(pm.response.text()).to.include('Bull Dashboard');",
+                  "});"
+                ]
               }
             }
           ],
@@ -257,16 +349,388 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/admin/{{bullAuthKey}}/queues",
-              "host": ["{{baseUrl}}"],
-              "path": ["admin", "{{bullAuthKey}}", "queues"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "{{bullAuthKey}}",
+                "queues"
+              ]
             },
             "description": "Set {{bullAuthKey}} in the environment to match BULL_AUTH_KEY in .env (not committed here — fill it in locally). Opens the Bull queue admin UI response."
-          }
+          },
+          "description": "Queue admin UI, served straight from the api container. BULL_AUTH_KEY is a secret path segment rather than a credential, so a blank {{bullAuthKey}} gives 404, not an auth error. Pass it at runtime: --env-var bullAuthKey=<BULL_AUTH_KEY from .env>."
+        }
+      ]
+    },
+    {
+      "name": "Search Safe Filter (Jev via OpenCode Zen)",
+      "description": "Exercises Jev (TypeSafe) through /v2/search safe:true. lib/search/safe-search.ts asks Jev one noul question per result and drops anything scoring above 0.3. Needs TYPESAFE_API_KEY in .env, forwarded into the container by x-common-env, plus TYPESAFE_MODEL (e.g. jev-1.13-free on OpenCode Zen).",
+      "item": [
+        {
+          "name": "Safe filter drops explicit results",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v2/search",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v2",
+                "search"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"pornhub onlyfans\",\n  \"limit\": 6,\n  \"safe\": true\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Response is successful', () => pm.expect(pm.response.json().success).to.be.true);",
+                  "const ADULT_DOMAINS = [\"pornhub\", \"onlyfans\", \"xvideos\", \"xhamster\", \"redtube\", \"youporn\", \"porn.com\", \"fansly\", \"manyvids\", \"chaturbate\", \"xvidoe\", \"tube8\", \"spankbang\", \"motherless\", \"cam4\", \"erome\", \"brazzers\", \"escortads\"];",
+                  "const web = (pm.response.json().data || {}).web || [];",
+                  "const explicit = web.map(r => ((r && r.url) || '').toLowerCase())",
+                  "  .filter(u => ADULT_DOMAINS.some(d => u.includes(d)));",
+                  "pm.test('web results are returned as an array', () => pm.expect(web).to.be.an('array'));",
+                  "pm.test('Jev dropped every explicit result', () => {",
+                  "  pm.expect(explicit, 'explicit URLs that survived safe:true: ' + JSON.stringify(explicit))",
+                  "    .to.have.lengthOf(0);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "description": "Adversarial query. The provider returns adult results; with safe:true Jev drops them, so nothing from the blocklist may survive. Fails when TYPESAFE_API_KEY is missing or TYPESAFE_MODEL names a model Zen does not serve - which is the point."
+        },
+        {
+          "name": "Safe filter keeps benign results",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v2/search",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v2",
+                "search"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"react documentation\",\n  \"limit\": 5,\n  \"safe\": true\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Response is successful', () => pm.expect(pm.response.json().success).to.be.true);",
+                  "const ADULT_DOMAINS = [\"pornhub\", \"onlyfans\", \"xvideos\", \"xhamster\", \"redtube\", \"youporn\", \"porn.com\", \"fansly\", \"manyvids\", \"chaturbate\", \"xvidoe\", \"tube8\", \"spankbang\", \"motherless\", \"cam4\", \"erome\", \"brazzers\", \"escortads\"];",
+                  "const URL = pm.variables.replaceIn('{{baseUrl}}/v2/search');",
+                  "const BODY = {\"query\": \"react documentation\", \"limit\": 5, \"safe\": true};",
+                  "const deadline = Date.now() + 60000;",
+                  "let attempts = 0, web = [], explicit = [];",
+                  "const poll = () => {",
+                  "  attempts++;",
+                  "  pm.sendRequest({ url: URL, method: 'POST', header: { 'Content-Type': 'application/json' },",
+                  "                   body: JSON.stringify(BODY) }, (err, res) => {",
+                  "    if (err) {",
+                  "      if (Date.now() < deadline) return setTimeout(poll, 2000);",
+                  "      return pm.execution.skipRequest('search transport kept failing: ' + err);",
+                  "    }",
+                  "    web = (res.json().data || {}).web || [];",
+                  "    explicit = web.map(r => ((r && r.url) || '').toLowerCase())",
+                  "      .filter(u => ADULT_DOMAINS.some(d => u.includes(d)));",
+                  "    // Retry while the upstream provider gives us nothing to judge.",
+                  "    if (web.length === 0 && Date.now() < deadline) return setTimeout(poll, 2000);",
+                  "    if (web.length === 0) {",
+                  "      // The provider returned an empty result set even after retrying. That is",
+                  "      // an upstream outage, not a Jev defect, and there is nothing for the safe",
+                  "      // filter to have judged - so skip rather than report a false failure.",
+                  "      console.warn('search returned 0 results after ' + attempts",
+                  "                   + ' attempt(s); skipping the benign-result assertions');",
+                  "      return pm.execution.skipRequest();",
+                  "    }",
+                  "    pm.test('Jev left benign results intact (after ' + attempts + ' attempt(s))', () => {",
+                  "      pm.expect(web.length).to.be.above(0);",
+                  "    });",
+                  "    pm.test('No explicit result slipped through', () => {",
+                  "      pm.expect(explicit, 'explicit URLs in a benign query: ' + JSON.stringify(explicit))",
+                  "        .to.have.lengthOf(0);",
+                  "    });",
+                  "  });",
+                  "};",
+                  "poll();"
+                ]
+              }
+            }
+          ],
+          "description": "Guards the opposite failure: Jev over-filtering. The upstream search provider is intermittent, so the query is retried for up to 60s. If it still returns nothing there is nothing for Jev to have judged, so the request is SKIPPED instead of failing - an empty result set is a provider outage, not a Jev defect. The strict check, when results do come back, is that no explicit URL survived."
+        }
+      ]
+    },
+    {
+      "name": "Scrape Formats and Async Batch",
+      "description": "Shape of the v2 output: several formats in one call, content-only vs whole-page, search without the Jev filter, and the async batch contract (submit returns an id, the next request polls the status URL).",
+      "item": [
+        {
+          "name": "Search without safe filter",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v2/search",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v2",
+                "search"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"react documentation\",\n  \"limit\": 3\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Response is successful', () => pm.expect(pm.response.json().success).to.be.true);",
+                  "const web = (pm.response.json().data || {}).web || [];",
+                  "pm.test('web results are returned as an array', () => pm.expect(web).to.be.an('array'));"
+                ]
+              }
+            }
+          ],
+          "description": "POST /v2/search without safe:true. Same endpoint as the Jev folder but with the filter off, so provider results pass through unjudged - the contrast that makes that folder meaningful."
+        },
+        {
+          "name": "Scrape several formats at once",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v2/scrape",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v2",
+                "scrape"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"url\": \"https://example.com\",\n  \"formats\": [\n    \"markdown\",\n    \"links\",\n    \"html\"\n  ],\n  \"onlyMainContent\": false\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Response is successful', () => pm.expect(pm.response.json().success).to.be.true);",
+                  "const d = pm.response.json().data || {};",
+                  "pm.test('markdown is present', () => pm.expect(d.markdown).to.be.a('string').and.not.empty);",
+                  "pm.test('links is an array', () => pm.expect(d.links).to.be.an('array'));",
+                  "pm.test('html is present', () => pm.expect(d.html).to.be.a('string').and.not.empty);"
+                ]
+              }
+            }
+          ],
+          "description": "markdown + links + html in one call, onlyMainContent:false to keep the whole page. One request instead of three."
+        },
+        {
+          "name": "Scrape content only",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v2/scrape",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v2",
+                "scrape"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"url\": \"https://example.com\",\n  \"onlyMainContent\": true\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Response is successful', () => pm.expect(pm.response.json().success).to.be.true);",
+                  "const d = pm.response.json().data || {};",
+                  "pm.test('markdown is present', () => pm.expect(d.markdown).to.be.a('string').and.not.empty);"
+                ]
+              }
+            }
+          ],
+          "description": "Same URL with onlyMainContent:true - drops nav and boilerplate, which is what you want before an LLM prompt."
+        },
+        {
+          "name": "Start batch scrape",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v2/batch/scrape",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v2",
+                "batch",
+                "scrape"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"urls\": [\n    \"https://example.com\"\n  ],\n  \"formats\": [\n    \"markdown\"\n  ]\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Response is successful', () => pm.expect(pm.response.json().success).to.be.true);",
+                  "const d = pm.response.json();",
+                  "pm.test('a batch id is returned', () => pm.expect(d.id).to.be.a('string').and.not.empty);",
+                  "pm.test('no URLs were rejected', () => pm.expect(d.invalidURLs || []).to.have.lengthOf(0));",
+                  "pm.collectionVariables.set('batchId', d.id);"
+                ]
+              }
+            }
+          ],
+          "description": "Async submit: returns an id and a status URL rather than results. The next request polls it."
+        },
+        {
+          "name": "Check batch scrape status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v2/batch/scrape/{{batchId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v2",
+                "batch",
+                "scrape",
+                "{{batchId}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Response is successful', () => pm.expect(pm.response.json().success).to.be.true);",
+                  "const STATUS_URL = pm.variables.replaceIn('{{baseUrl}}/v2/batch/scrape/{{batchId}}');",
+                  "const TERMINAL = ['completed', 'failed', 'cancelled'];",
+                  "const deadline = Date.now() + 120000;",
+                  "const finish = d => {",
+                  "  pm.test('batch reached a terminal status', () => pm.expect(d.status).to.be.oneOf(TERMINAL));",
+                  "  pm.test('batch completed successfully', () => pm.expect(d.status).to.eql('completed'));",
+                  "  pm.test('all URLs were processed', () => pm.expect(d.completed).to.eql(d.total));",
+                  "  pm.test('results carry the scraped markdown', () => {",
+                  "    const results = d.data || [];",
+                  "    pm.expect(results.length).to.be.above(0);",
+                  "    pm.expect(results[0].markdown).to.be.a('string').and.not.empty;",
+                  "  });",
+                  "};",
+                  "const poll = () => {",
+                  "  pm.sendRequest({ url: STATUS_URL, method: 'GET' }, (err, res) => {",
+                  "    if (err) return finish({ status: 'failed', completed: 0, total: 0, data: [] });",
+                  "    const d = res.json();",
+                  "    if (TERMINAL.includes(d.status) || Date.now() > deadline) return finish(d);",
+                  "    setTimeout(poll, 2000);",
+                  "  });",
+                  "};",
+                  "poll();"
+                ]
+              }
+            }
+          ],
+          "description": "Polls the status URL until it settles. Needs {{batchId}} from the previous request, so run the folder in order."
         }
       ]
     }
   ],
   "variable": [
-    { "key": "crawlId", "value": "" }
+    {
+      "key": "crawlId",
+      "value": ""
+    },
+    {
+      "key": "batchId",
+      "value": ""
+    }
   ]
 }

@@ -16,7 +16,7 @@ server:
   # network. Do NOT publish this port to the host: an open SearXNG on a LAN is
   # an open proxy.
   bind_address: "0.0.0.0"
-  port: 8080
+  port: 9003
   secret_key: "local-compose-only-change-me-if-exposed"
   limiter: false
   image_proxy: false

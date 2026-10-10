@@ -183,7 +183,13 @@ services:
       # it Firecrawl gets 200 responses carrying no results array.
       - ./searxng:/etc/searxng:rw
     environment:
-      - SEARXNG_BASE_URL=http://localhost:8080/
+      # The image entrypoint maps SEARXNG_PORT -> GRANIAN_PORT, and granian is
+      # what actually binds. settings.yml's `server.port` is ignored here, so
+      # this is the value that has to be right.
+      - SEARXNG_PORT=9003
+      # Only used to build absolute result links; keep the port in step with
+      # SEARXNG_PORT above.
+      - SEARXNG_BASE_URL=http://localhost:9003/
 
   redis:
     # NOTE: If you want to use Valkey (open source) instead of Redis (source available),
