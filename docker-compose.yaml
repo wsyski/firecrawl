@@ -184,7 +184,7 @@ services:
     # address can search through it, so binding the LAN address makes this
     # machine an open metasearch proxy for the network.
     ports:
-      - "${SEARXNG_BIND:-127.0.0.1}:9003:9003"
+      - "${SEARXNG_BIND:-127.0.0.1}:3003:3003"
     # Pinned by digest, not :latest. A SearXNG release that changes the settings
     # schema can stop honouring `formats: [html, json]`, and the symptom is 200
     # responses with no results array - which reads as "search is broken" rather
@@ -204,10 +204,10 @@ services:
       # The image entrypoint maps SEARXNG_PORT -> GRANIAN_PORT, and granian is
       # what actually binds. settings.yml's `server.port` is ignored here, so
       # this is the value that has to be right.
-      - SEARXNG_PORT=9003
+      - SEARXNG_PORT=3003
       # Only used to build absolute result links; keep the port in step with
       # SEARXNG_PORT above.
-      - SEARXNG_BASE_URL=http://localhost:9003/
+      - SEARXNG_BASE_URL=http://localhost:3003/
 
   redis:
     # NOTE: If you want to use Valkey (open source) instead of Redis (source available),
