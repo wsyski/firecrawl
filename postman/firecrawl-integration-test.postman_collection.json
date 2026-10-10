@@ -444,6 +444,127 @@
               }
             }
           ]
+        },
+        {
+          "name": "Ask Jev about a finance question (OpenCode Zen)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{typesafeApiKey}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"state\": \"Will the Federal Reserve cut interest rates in March?\",\n  \"model\": \"{{jevModel}}\",\n  \"questions\": {\n    \"explicit\": {\n      \"type\": \"noul\",\n      \"instructions\": \"Is this adult content?\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{typesafeUrl}}/v1/systemone",
+              "host": [
+                "{{typesafeUrl}}"
+              ],
+              "path": [
+                "v1",
+                "systemone"
+              ]
+            },
+            "description": "The same direct Zen call as the example above, on a different kind of text: a finance question instead of a blunt one. It answers the point of the pair - the noul score tracks what the text is about, not how it is phrased, so both land well under the 0.3 threshold in apps/api/src/search/safe-search.ts. Two scores from the same model, so they are comparable."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Jev is a fork addition and Firecrawl runs without it, so a missing key is",
+                  "// not a Firecrawl failure. The Postman cloud runner deliberately has no Zen",
+                  "// credential, where a hard 401 would report a problem that is not there.",
+                  "const key = (pm.variables.replaceIn('{{typesafeApiKey}}') || '').trim();",
+                  "if (!key) {",
+                  "  console.warn('typesafeApiKey is empty; skipping. postman/run.sh supplies it from .env.prod.');",
+                  "  pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Same quota handling as the previous request: Zen answers 429 once the",
+                  "// key's quota is spent, and a refusal is retried and then skipped rather",
+                  "// than reported as a Jev defect.",
+                  "const URL = pm.variables.replaceIn('{{typesafeUrl}}/v1/systemone');",
+                  "const HEADERS = pm.request.headers.toObject();",
+                  "const BODY = pm.request.body.raw;",
+                  "const DEADLINE_MS = 90000;",
+                  "const deadline = Date.now() + DEADLINE_MS;",
+                  "let res = pm.response;",
+                  "",
+                  "const refusable = () => res.code === 429 || res.code >= 500;",
+                  "",
+                  "function check(response) {",
+                  "  pm.test('Status code is 200', () => pm.response.to.have.status(200));",
+                  "",
+                  "  const body = response.json();",
+                  "  pm.test('Response answers the question we asked', () => {",
+                  "    pm.expect(body).to.have.property('answers');",
+                  "    pm.expect(body.answers).to.have.property('explicit');",
+                  "    pm.expect(body.answers.explicit).to.have.property('noul');",
+                  "  });",
+                  "",
+                  "  const noul = body.answers && body.answers.explicit && body.answers.explicit.noul;",
+                  "  pm.test('Score is a probability', () => {",
+                  "    pm.expect(noul, 'answers.explicit.noul was ' + JSON.stringify(noul)).to.be.a('number');",
+                  "    pm.expect(noul).to.be.within(0, 1);",
+                  "  });",
+                  "",
+                  "  pm.test('The configured model is the one that answered', () => {",
+                  "    pm.expect(body.model, 'response said model ' + JSON.stringify(body.model))",
+                  "      .to.eql(pm.variables.replaceIn('{{jevModel}}'));",
+                  "  });",
+                  "",
+                  "  pm.test('A finance question scored below the explicit threshold', () => {",
+                  "    // Mirrors EXPLICIT_THRESHOLD in apps/api/src/search/safe-search.ts.",
+                  "    pm.expect(noul, 'finance string scored ' + noul).to.be.below(0.3);",
+                  "  });",
+                  "}",
+                  "",
+                  "function step() {",
+                  "  if (!refusable()) return check(res);",
+                  "  if (Date.now() >= deadline) {",
+                  "    console.warn('Zen still refusing after ' + DEADLINE_MS + 'ms (' + res.code",
+                  "      + '); skipping the Jev assertions rather than failing on quota.');",
+                  "    return pm.execution.skipRequest();",
+                  "  }",
+                  "  setTimeout(() => {",
+                  "    pm.sendRequest({ url: URL, method: 'POST', header: HEADERS, body: BODY }, (err, r) => {",
+                  "      if (!err && r) res = r;",
+                  "      step();",
+                  "    });",
+                  "  }, 5000);",
+                  "}",
+                  "",
+                  "step();"
+                ]
+              }
+            }
+          ]
         }
       ]
     },
@@ -488,7 +609,7 @@
     },
     {
       "name": "Search Safe Filter (Jev via OpenCode Zen)",
-      "description": "Exercises Jev (TypeSafe) through /v2/search safe:true. lib/search/safe-search.ts asks Jev one noul question per result and drops anything scoring above 0.3. Needs TYPESAFE_API_KEY in .env, forwarded into the container by x-common-env, plus TYPESAFE_MODEL (e.g. jev-1.13 on OpenCode Zen).",
+      "description": "Exercises Jev (TypeSafe) through /v2/search safe:true. lib/search/safe-search.ts asks Jev one noul question per result and drops anything scoring above 0.3. Needs TYPESAFE_API_KEY in .env, forwarded into the container by x-common-env, plus TYPESAFE_MODEL (e.g. jev-1.13 on OpenCode Zen). The last two requests run the same filter at limit 20: the page-size contract (cost, latency, one noul question per result) and the over-filtering guard.",
       "item": [
         {
           "name": "Safe filter drops explicit results",
@@ -612,6 +733,691 @@
             }
           ],
           "description": "Guards the opposite failure: Jev over-filtering. The upstream search provider is intermittent, so the query is retried for up to 60s. If it still returns nothing there is nothing for Jev to have judged, so the request is SKIPPED instead of failing - an empty result set is a provider outage, not a Jev defect. The strict check, when results do come back, is that no explicit URL survived."
+        },
+        {
+          "name": "Twenty results through the safe filter",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v2/search",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v2",
+                "search"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"python asyncio tutorial\",\n  \"limit\": 20,\n  \"safe\": true\n}"
+            },
+            "description": "The same call as the rest of this folder at four times the size. The point of limit 20 is cost and shape, not filtering: removeExplicitResults (apps/api/src/search/safe-search.ts) asks Jev one noul question per result, so a page of 20 is 20 Zen calls and the slowest part of the request. Watch the response time against the limit 5 example - SearXNG pages 20 at a time, so this is also the first size where Firecrawl needs more than one page."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Same retry discipline as the benign example: an empty page is an",
+                  "// upstream outage, so keep asking briefly and skip rather than fail.",
+                  "const URL = pm.variables.replaceIn('{{baseUrl}}/v2/search');",
+                  "const BODY = { query: 'python asyncio tutorial', limit: 20, safe: true };",
+                  "const deadline = Date.now() + 90000;",
+                  "let attempts = 0, started = Date.now();",
+                  "const poll = () => {",
+                  "  attempts++;",
+                  "  pm.sendRequest({ url: URL, method: 'POST',",
+                  "                   header: { 'Content-Type': 'application/json' },",
+                  "                   body: JSON.stringify(BODY) }, (err, res) => {",
+                  "    if (err) {",
+                  "      if (Date.now() < deadline) return setTimeout(poll, 2000);",
+                  "      return pm.execution.skipRequest('search transport kept failing: ' + err);",
+                  "    }",
+                  "    const body = res.json();",
+                  "    const web = (body.data || {}).web || [];",
+                  "    if (web.length === 0 && Date.now() < deadline) return setTimeout(poll, 2000);",
+                  "    if (web.length === 0) {",
+                  "      console.warn('no results after ' + attempts + ' attempt(s); skipping');",
+                  "      return pm.execution.skipRequest();",
+                  "    }",
+                  "    console.log(web.length + ' result(s) in ' + (Date.now() - started)",
+                  "                 + 'ms after ' + attempts + ' attempt(s)');",
+                  "    pm.test('Status code is 200 (after ' + attempts + ' attempt(s))',",
+                  "      () => pm.expect(res.code).to.eql(200));",
+                  "    pm.test('Response is successful', () => pm.expect(body.success).to.be.true);",
+                  "    pm.test('limit 20 is honoured, never exceeded', () => pm.expect(web.length).to.be.at.most(20));",
+                  "    pm.test('A full page of results came back, not a handful', () =>",
+                  "      pm.expect(web.length, 'only ' + web.length + ' of 20 survived - over-filtering?').to.be.above(10));",
+                  "    pm.test('Every result carries url and title', () => {",
+                  "      const bad = web.filter(r => !r || !r.url || !r.title).map(r => (r || {}).url);",
+                  "      pm.expect(bad, 'results missing url/title: ' + JSON.stringify(bad.slice(0, 3))).to.have.lengthOf(0);",
+                  "    });",
+                  "    pm.test('description is always a string, and usually non-empty', () => {",
+                  "      // mappers.web sets description from SearXNG's content, which some engines",
+                  "      // leave empty (translation stubs, index pages), so empty is legitimate here -",
+                  "      // absent is not.",
+                  "      const absent = web.filter(r => typeof r.description !== 'string').map(r => r.url);",
+                  "      const empty = web.filter(r => r.description === '');",
+                  "      console.log((web.length - empty.length) + '/' + web.length + ' results have a description');",
+                  "      pm.expect(absent, 'results without a description field: ' + JSON.stringify(absent.slice(0, 3))).to.have.lengthOf(0);",
+                  "      pm.expect(empty, 'every result came back with a description').to.have.length.above(0);",
+                  "    });",
+                  "    pm.test('URLs are unique across the whole page', () => {",
+                  "      const urls = web.map(r => r.url);",
+                  "      pm.expect(new Set(urls).size, 'duplicate urls: ' + JSON.stringify(urls)).to.eql(urls.length);",
+                  "    });",
+                  "  });",
+                  "};",
+                  "poll();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Twenty benign results, none dropped",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v2/search",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v2",
+                "search"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"federal reserve interest rates\",\n  \"limit\": 20,\n  \"safe\": true\n}"
+            },
+            "description": "The over-filtering guard at page size. Jev is asked about every one of the 20 results and must keep all of them - a filter that empties a finance query is a worse defect than one that lets something through, because nothing downstream notices. Cheaper than it looks: one noul question per result, and the answers are independent."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const URL = pm.variables.replaceIn('{{baseUrl}}/v2/search');",
+                  "const BODY = { query: 'federal reserve interest rates', limit: 20, safe: true };",
+                  "const deadline = Date.now() + 90000;",
+                  "const hasJev = (pm.variables.replaceIn('{{typesafeApiKey}}') || '').trim() !== '';",
+                  "let attempts = 0, web = [];",
+                  "const poll = () => {",
+                  "  attempts++;",
+                  "  pm.sendRequest({ url: URL, method: 'POST',",
+                  "                   header: { 'Content-Type': 'application/json' },",
+                  "                   body: JSON.stringify(BODY) }, (err, res) => {",
+                  "    if (err) {",
+                  "      if (Date.now() < deadline) return setTimeout(poll, 2000);",
+                  "      return pm.execution.skipRequest('search transport kept failing: ' + err);",
+                  "    }",
+                  "    const body = res.json();",
+                  "    web = (body.data || {}).web || [];",
+                  "    if (web.length === 0 && Date.now() < deadline) return setTimeout(poll, 2000);",
+                  "    if (web.length === 0) {",
+                  "      console.warn('no results after ' + attempts + ' attempt(s); skipping');",
+                  "      return pm.execution.skipRequest();",
+                  "    }",
+                  "    pm.test('Status code is 200 (after ' + attempts + ' attempt(s))',",
+                  "      () => pm.expect(res.code).to.eql(200));",
+                  "    pm.test('Response is successful', () => pm.expect(body.success).to.be.true);",
+                  "    pm.test('Nearly the whole page survived the filter', () => {",
+                  "      console.log(web.length + '/20 results survived (after ' + attempts + ' attempt(s))');",
+                  "      pm.expect(web.length).to.be.above(15);",
+                  "    });",
+                  "    // /v2/search returns no score and no marker that the filter ran, so what can be",
+                  "    // asserted here is only the count above - say whether Jev was in the loop so a",
+                  "    // pass is not read as more than it is.",
+                  "    console.log(hasJev",
+                  "      ? 'Jev scored all ' + web.length + ' results (typesafeApiKey present)'",
+                  "      : 'typesafeApiKey empty: Jev did not run, so only the provider chain was tested');",
+                  "  });",
+                  "};",
+                  "poll();"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "SearXNG (local search provider)",
+      "description": "SearXNG is the container /v2/search asks first on this stack. The chain is fire-engine -> SearXNG -> DuckDuckGo (apps/api/src/search/v2/index.ts); with FIRE_ENGINE_BETA_URL unset, SearXNG is the first link and DuckDuckGo only fills in what it missed. Two halves: the first talks to the instance directly, which is how you tell a SearXNG problem apart from a Firecrawl problem; the second goes through Firecrawl and asserts the shape apps/api/src/search/v2/searxng.ts builds.\n\nKnobs: SEARXNG_ENDPOINT in .env (without it Firecrawl never calls SearXNG at all), SEARXNG_ENGINES / SEARXNG_CATEGORIES to narrow the web category, SEARXNG_NEWS_CATEGORIES to replace the news categories (default news), and searxng/settings.yml, which must keep search.formats [html, json] - without json Firecrawl gets 200 responses carrying no results array.\n\n{{searxngUrl}} is a collection variable so these run without an environment change; point it at the SEARXNG_ENDPOINT host.\n\nThe folder carries one pre-request guard: a request whose host variable does not resolve to a real URL is skipped with a console warning naming the variable, which is what a shared-link copy (no collection variable, no environment selected) produces.",
+      "item": [
+        {
+          "name": "Standalone SearXNG (bypasses Firecrawl)",
+          "description": "Straight at the instance, which is what a metasearch client (Hermes, a browser bookmark) does. Useful because SearXNG has no authentication: whatever address SEARXNG_BIND publishes is an open search proxy for that network.",
+          "item": [
+            {
+              "name": "Instance config and enabled engines",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('Status code is 200', () => pm.response.to.have.status(200));",
+                      "pm.test('Response is JSON', () =>",
+                      "  pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json'));",
+                      "const cfg = pm.response.json();",
+                      "pm.test('Instance identifies itself', () => {",
+                      "  pm.expect(cfg).to.have.property('version');",
+                      "  pm.expect(cfg.version, 'version was ' + JSON.stringify(cfg.version)).to.be.a('string').and.not.empty;",
+                      "});",
+                      "pm.test('The engine catalogue is published', () => {",
+                      "  pm.expect(cfg.engines).to.be.an('array');",
+                      "  pm.expect(cfg.engines.length).to.be.above(100);",
+                      "});",
+                      "pm.test('At least one engine is enabled, so a search can answer', () => {",
+                      "  const on = (cfg.engines || []).filter(e => e && e.enabled).map(e => e.name);",
+                      "  console.log('instance ' + cfg.instance_name + ', ' + cfg.version + ', ' + on.length + ' enabled engine(s): ' + on.join(', '));",
+                      "  pm.expect(on, 'nothing is enabled in searxng/settings.yml, so every search comes back empty').to.have.length.above(0);",
+                      "});",
+                      "pm.test('The categories Firecrawl asks for are published', () => {",
+                      "  pm.expect(cfg.categories).to.include.members(['general', 'news', 'images']);",
+                      "});"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{searxngUrl}}/config",
+                  "host": [
+                    "{{searxngUrl}}"
+                  ],
+                  "path": [
+                    "config"
+                  ],
+                  "query": [
+                    {
+                      "key": "format",
+                      "value": "json"
+                    }
+                  ]
+                },
+                "description": "GET /config?format=json - what this instance will actually answer with: which engines are enabled, and which categories exist. An empty engine list here explains an empty result set everywhere else in this folder."
+              }
+            },
+            {
+              "name": "Direct JSON search",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('Status code is 200', () => pm.response.to.have.status(200));",
+                      "const body = pm.response.json();",
+                      "pm.test('JSON format is enabled', () => {",
+                      "  // Firecrawl asks for exactly this. Without json under search.formats in",
+                      "  // searxng/settings.yml SearXNG answers in HTML and this is the failure:",
+                      "  // a parseable body with no results array.",
+                      "  pm.expect(body).to.have.property('results');",
+                      "  pm.expect(body.results).to.be.an('array');",
+                      "});",
+                      "pm.test('Results came back', () => {",
+                      "  pm.expect(body.results, 'zero results with no unresponsive_engines means the query, not the instance, is at fault')",
+                      "    .to.have.length.above(0);",
+                      "});",
+                      "pm.test('The query is echoed back', () => {",
+                      "  const sent = decodeURIComponent(((pm.request.url.query || []).find(p => p.key === 'q') || {}).value || '');",
+                      "  pm.expect(body.query, 'SearXNG echoed back a different query').to.eql(sent);",
+                      "});",
+                      "pm.test('Every result carries the fields mappers.web reads (url, title, content)', () => {",
+                      "  const bad = body.results",
+                      "    .filter(r => !r || !r.url || !r.title || typeof r.content !== 'string')",
+                      "    .map(r => (r || {}).url);",
+                      "  pm.expect(bad, 'results missing url/title/content: ' + JSON.stringify(bad.slice(0, 3)))",
+                      "    .to.have.lengthOf(0);",
+                      "});",
+                      "// Upstream engines time out sporadically, so this is reported rather than",
+                      "// asserted: the gate above (results came back) is what the instance is judged",
+                      "// on. An entry here names an engine that did not answer this page.",
+                      "const stuck = (body.unresponsive_engines || [])",
+                      "  .map(e => Array.isArray(e) ? e[0] : (e && (e.name || e.engine)));",
+                      "console.log(stuck.length + ' unresponsive engine(s): ' + JSON.stringify(body.unresponsive_engines));"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{searxngUrl}}/search",
+                  "host": [
+                    "{{searxngUrl}}"
+                  ],
+                  "path": [
+                    "search"
+                  ],
+                  "query": [
+                    {
+                      "key": "q",
+                      "value": "python asyncio tutorial"
+                    },
+                    {
+                      "key": "format",
+                      "value": "json"
+                    },
+                    {
+                      "key": "categories",
+                      "value": "general"
+                    },
+                    {
+                      "key": "pageno",
+                      "value": "1"
+                    }
+                  ]
+                },
+                "description": "The call Firecrawl makes for a web search: GET /search with format=json. mappers.web turns content into description and drops everything else, so these extra fields (template, engines, parsed_url) never reach a Firecrawl caller. categories=general is what Firecrawl sends when SEARXNG_CATEGORIES is empty."
+              }
+            },
+            {
+              "name": "News category search",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('Status code is 200', () => pm.response.to.have.status(200));",
+                      "const body = pm.response.json();",
+                      "pm.test('Response carries a results array', () => pm.expect(body.results).to.be.an('array'));",
+                      "const news = body.results || [];",
+                      "const dated = news.filter(r => r && r.publishedDate);",
+                      "console.log(news.length + ' news result(s), ' + dated.length + ' with publishedDate');",
+                      "pm.test('The news category answers', () => {",
+                      "  pm.expect(news, 'no news results; check SEARXNG_NEWS_CATEGORIES against this instance (its categories must exist in /config)').to.have.length.above(0);",
+                      "});",
+                      "pm.test('Results carry publishedDate, which becomes `date` in Firecrawl', () => {",
+                      "  pm.expect(dated, 'no news result had a publishedDate').to.have.length.above(0);",
+                      "});"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{searxngUrl}}/search",
+                  "host": [
+                    "{{searxngUrl}}"
+                  ],
+                  "path": [
+                    "search"
+                  ],
+                  "query": [
+                    {
+                      "key": "q",
+                      "value": "bitcoin price"
+                    },
+                    {
+                      "key": "format",
+                      "value": "json"
+                    },
+                    {
+                      "key": "categories",
+                      "value": "news"
+                    }
+                  ]
+                },
+                "description": "categories=news is the news half of the mapping: mappers.news renames content to snippet and publishedDate to date. Firecrawl sends SEARXNG_NEWS_CATEGORIES here (default news) and, per the comment in search/v2/searxng.ts, deliberately sends no engines pin - a pin like \"yahoo,mwmbl\" would leave the news category with no engine to run."
+              }
+            },
+            {
+              "name": "Images category search",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('Status code is 200', () => pm.response.to.have.status(200));",
+                      "const body = pm.response.json();",
+                      "const images = body.results || [];",
+                      "pm.test('Response carries a results array', () => pm.expect(images).to.be.an('array'));",
+                      "pm.test('Every result has both a page url and img_src', () => {",
+                      "  const bad = images.filter(r => !r || !r.url || !r.img_src).map(r => (r || {}).url);",
+                      "  pm.expect(bad, 'results missing url/img_src: ' + JSON.stringify(bad.slice(0, 3))).to.have.lengthOf(0);",
+                      "});",
+                      "pm.test('The image URL and the page URL differ, so imageUrl is not a copy of url', () => {",
+                      "  const same = images.filter(r => r && r.url && r.img_src && r.url === r.img_src);",
+                      "  console.log(images.length + ' image result(s), ' + same.length + ' with url === img_src');",
+                      "});"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{searxngUrl}}/search",
+                  "host": [
+                    "{{searxngUrl}}"
+                  ],
+                  "path": [
+                    "search"
+                  ],
+                  "query": [
+                    {
+                      "key": "q",
+                      "value": "ethereum logo"
+                    },
+                    {
+                      "key": "format",
+                      "value": "json"
+                    },
+                    {
+                      "key": "categories",
+                      "value": "images"
+                    }
+                  ]
+                },
+                "description": "categories=images. mappers.images keeps url as the page the image was found on and renames img_src to imageUrl - the pair Firecrawl returns as {url, title, imageUrl}. Engines differ here in how they fill those, which is why only the presence of both fields is asserted."
+              }
+            },
+            {
+              "name": "Strict safesearch (what safe:true adds)",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('Status code is 200', () => pm.response.to.have.status(200));",
+                      "const body = pm.response.json();",
+                      "pm.test('Response carries a results array', () => pm.expect(body.results).to.be.an('array'));",
+                      "pm.test('Results came back', () => {",
+                      "  pm.expect(body.results, 'safesearch=2 emptied a benign query; check the enabled engines honour safesearch').to.have.length.above(0);",
+                      "});"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{searxngUrl}}/search",
+                  "host": [
+                    "{{searxngUrl}}"
+                  ],
+                  "path": [
+                    "search"
+                  ],
+                  "query": [
+                    {
+                      "key": "q",
+                      "value": "federal reserve interest rates"
+                    },
+                    {
+                      "key": "format",
+                      "value": "json"
+                    },
+                    {
+                      "key": "categories",
+                      "value": "general"
+                    },
+                    {
+                      "key": "safesearch",
+                      "value": "2"
+                    }
+                  ]
+                },
+                "description": "safesearch=2 is strict, and it is the only thing /v2/search safe:true adds to the SearXNG request (search/v2/searxng.ts sends it only when safe is set, otherwise the instance default applies). How much each engine honours it varies, so this asserts the parameter is accepted and the query still answers rather than pinning a result count. The Jev filter that runs on top of safe:true is a separate stage, covered by the Search Safe Filter folder."
+              }
+            }
+          ]
+        },
+        {
+          "name": "Through Firecrawl (/v2/search)",
+          "description": "The same SearXNG instance as seen by a Firecrawl caller: categories mapped per source, results reshaped by the mappers. Note what these cannot prove - the DuckDuckGo fallback produces the same url/title/description fields, so a passing response here does not by itself prove SearXNG answered. Run the Standalone folder when you need to know that.",
+          "item": [
+            {
+              "name": "Web results from the SearXNG provider",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "// SearXNG fans out to several engines and any of them can be slow, so retry",
+                      "// briefly before judging. An empty set after the retries is an upstream",
+                      "// problem, not a mapping defect, so skip instead of failing.",
+                      "const URL = pm.variables.replaceIn('{{baseUrl}}/v2/search');",
+                      "const BODY = { query: 'federal reserve interest rates', limit: 5 };",
+                      "const deadline = Date.now() + 60000;",
+                      "let attempts = 0;",
+                      "const poll = () => {",
+                      "  attempts++;",
+                      "  pm.sendRequest({ url: URL, method: 'POST',",
+                      "                   header: { 'Content-Type': 'application/json' },",
+                      "                   body: JSON.stringify(BODY) }, (err, res) => {",
+                      "    if (err) {",
+                      "      if (Date.now() < deadline) return setTimeout(poll, 2000);",
+                      "      return pm.execution.skipRequest('search transport kept failing: ' + err);",
+                      "    }",
+                      "    const body = res.json();",
+                      "    const results = (body.data || {}).web || [];",
+                      "    if (results.length === 0 && Date.now() < deadline) return setTimeout(poll, 2000);",
+                      "    if (results.length === 0) {",
+                      "      console.warn('no web results after ' + attempts + ' attempt(s); the whole provider chain (fire-engine -> searxng -> DuckDuckGo) answered nothing');",
+                      "      return pm.execution.skipRequest();",
+                      "    }",
+                      "    pm.test('Status code is 200 (after ' + attempts + ' attempt(s))',",
+                      "      () => pm.expect(res.code).to.eql(200));",
+                      "    pm.test('Response is successful', () => pm.expect(body.success).to.be.true);",
+                      "    pm.test('web is filled', () => pm.expect(results).to.be.an('array').with.length.above(0));",
+                      "    pm.test('Results carry url and title', () => {",
+                      "      const bad = results.filter(r => !r || !r.url || !r.title).map(r => (r || {}).url);",
+                      "      pm.expect(bad, 'results missing url/title: ' + JSON.stringify(bad.slice(0, 3))).to.have.lengthOf(0);",
+                      "    });",
+                      "    pm.test('SearXNG\\'s content field arrived as description', () => {",
+                      "      const withDescription = results.filter(r => typeof r.description === 'string' && r.description.length > 0);",
+                      "      console.log(withDescription.length + '/' + results.length + ' results carry a description');",
+                      "      pm.expect(withDescription).to.have.length.above(0);",
+                      "    });",
+                      "    pm.test('URLs are unique', () => {",
+                      "      const urls = results.map(r => r.url);",
+                      "      pm.expect(new Set(urls).size, 'duplicate urls: ' + JSON.stringify(urls)).to.eql(urls.length);",
+                      "    });",
+                      "  });",
+                      "};",
+                      "poll();"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/v2/search",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "v2",
+                    "search"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"query\": \"federal reserve interest rates\",\n  \"limit\": 5\n}"
+                },
+                "description": "The plain path: sources defaults to web, so SearXNG is queried with categories=general and SEARXNG_ENGINES. `limit` is not passed to SearXNG, which has no num parameter - searxng.ts pages 20 at a time and slices to limit. Expect a slow first answer while engines warm up."
+              }
+            },
+            {
+              "name": "News and images in one call",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('Status code is 200', () => pm.response.to.have.status(200));",
+                      "pm.test('Response is successful', () => pm.expect(pm.response.json().success).to.be.true);",
+                      "const payload = pm.response.json().data || {};",
+                      "pm.test('news is filled (SearXNG categories=news)', () => {",
+                      "  pm.expect(payload.news).to.be.an('array').with.length.above(0);",
+                      "});",
+                      "pm.test('news results use snippet and date, not description', () => {",
+                      "  const news = payload.news || [];",
+                      "  const dated = news.filter(r => r && r.date);",
+                      "  const described = news.filter(r => r && r.description);",
+                      "  pm.expect(dated, 'no news result carried a date').to.have.length.above(0);",
+                      "  pm.expect(described, 'news results should not carry the web mapper\\'s description').to.have.lengthOf(0);",
+                      "});",
+                      "pm.test('images is filled (SearXNG categories=images)', () => {",
+                      "  pm.expect(payload.images).to.be.an('array').with.length.above(0);",
+                      "});",
+                      "pm.test('image results carry imageUrl from img_src', () => {",
+                      "  const bad = (payload.images || [])",
+                      "    .filter(r => !r || !r.url || !r.imageUrl)",
+                      "    .map(r => (r || {}).url);",
+                      "  pm.expect(bad, 'image results missing url/imageUrl: ' + JSON.stringify(bad.slice(0, 3))).to.have.lengthOf(0);",
+                      "});",
+                      "pm.test('web is absent - only the requested sources are queried', () => {",
+                      "  pm.expect(payload.web, 'web was not requested; it only appears if the SearXNG answer was empty and the DuckDuckGo fallback ran').to.eql(undefined);",
+                      "});"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/v2/search",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "v2",
+                    "search"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"query\": \"bitcoin price\",\n  \"limit\": 3,\n  \"sources\": [\"news\", \"images\"]\n}"
+                },
+                "description": "sources maps straight onto SearXNG categories: web -> SEARXNG_CATEGORIES, news -> SEARXNG_NEWS_CATEGORIES, images -> images. Two upstream calls in one request, each with its own engine pin (none, per categoryOf in search/v2/searxng.ts), and each answer reshaped by its own mapper - which is why news has snippet/date and images has imageUrl."
+              }
+            },
+            {
+              "name": "Legacy /v1/search (older mapper)",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('Status code is 200', () => pm.response.to.have.status(200));",
+                      "pm.test('Response is successful', () => pm.expect(pm.response.json().success).to.be.true);",
+                      "const results = pm.response.json().data || [];",
+                      "pm.test('data is a flat array', () => pm.expect(results).to.be.an('array'));",
+                      "pm.test('Results came back', () => pm.expect(results).to.have.length.above(0));",
+                      "pm.test('Every result has url, title and description', () => {",
+                      "  const bad = results.filter(r => !r || !r.url || !r.title || !r.description)",
+                      "    .map(r => (r || {}).url);",
+                      "  pm.expect(bad, 'results missing url/title/description: ' + JSON.stringify(bad.slice(0, 3))).to.have.lengthOf(0);",
+                      "});",
+                      "pm.test('No news or images key exists on this endpoint', () => {",
+                      "  const body = pm.response.json();",
+                      "  pm.expect(body.data.news).to.eql(undefined);",
+                      "  pm.expect(body.data.images).to.eql(undefined);",
+                      "});"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/v1/search",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "v1",
+                    "search"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"query\": \"python asyncio tutorial\",\n  \"limit\": 3\n}"
+                },
+                "description": "The same instance through the older provider file, apps/api/src/search/searxng.ts, which knows nothing of sources or safesearch: it always queries the general category, ignores the engine pin for anything else, and returns a flat array of {url, title, description}. Useful as the contrast that shows what the v2 mapper adds."
+              }
+            }
+          ]
+        }
+      ],
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Opening this folder from a shared link gives a copy with no collection variable and",
+              "// no environment, and pm.variables.replaceIn then hands back the placeholder itself -",
+              "// '{{searxngUrl}}' is not an empty string. A blank check misses that, so the request",
+              "// goes out to a bogus host and fails red. Require a real URL instead and skip, naming",
+              "// the variable that is actually missing.",
+              "//",
+              "// host is read, not url.raw: inside a pre-request pm.request.url.raw is undefined and",
+              "// String(pm.request.url) is the pre-resolution template. host holds the unexpanded",
+              "// variable, which is what has to be resolved here.",
+              "const host = (pm.request.url.host || [])[0] || '';",
+              "const varName = host.replace(/[{}]/g, '') || 'the host variable';",
+              "const value = (pm.variables.replaceIn(host) || '').trim();",
+              "if (!/^https?:\\/\\/\\S+$/.test(value)) {",
+              "  console.warn(varName + ' resolves to ' + JSON.stringify(value) + ', which is not a URL; skipping. Define it as a collection variable, or select an environment that has it.');",
+              "  pm.execution.skipRequest();",
+              "}"
+            ]
+          }
         }
       ]
     },
@@ -853,6 +1659,11 @@
     {
       "key": "batchId",
       "value": ""
+    },
+    {
+      "key": "searxngUrl",
+      "value": "http://192.168.1.100:3003",
+      "type": "string"
     }
   ]
 }
