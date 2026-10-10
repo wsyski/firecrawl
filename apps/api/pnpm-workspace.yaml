@@ -1,6 +1,12 @@
 packages:
   - "native"
 injectWorkspacePackages: true
+# foundationdb's native build needs the FoundationDB C client headers, which
+# aren't present here, so its install script fails. verifyDepsBeforeRun re-runs
+# that install before every `pnpm exec`/`pnpm run` and aborts the command even
+# though node_modules is fine. Call the binaries in node_modules directly
+# instead (see AGENTS.md). Set NUQ_BACKEND=pg so nothing needs the FDB client.
+verifyDepsBeforeRun: false
 minimumReleaseAge: 720 # 12 hours
 minimumReleaseAgeExclude:
   - fast-xml-parser
