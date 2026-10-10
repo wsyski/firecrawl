@@ -6,6 +6,18 @@ x-common-service: &common-service
   # image: ghcr.io/firecrawl/firecrawl
   build: apps/api
 
+  # Pass every key from the repo-root .env into the container, instead of
+  # relying only on the x-common-env allowlist below. Without this, adding a
+  # setting to apps/api/src/config.ts and .env silently does nothing unless it
+  # is also listed in x-common-env — the failure mode that left TYPESAFE_*,
+  # MAX_RAM and MAX_CPU unset inside the container. Entries in `environment:`
+  # still win, so container-internal values (NUQ_RABBITMQ_URL, POSTGRES_HOST,
+  # ...) are unaffected. `required: false` keeps `docker compose config` working
+  # on a checkout that has no .env yet.
+  env_file:
+    - path: .env
+      required: false
+
   restart: unless-stopped
   ulimits:
     nofile:
@@ -38,7 +50,11 @@ x-common-env: &common-env
   BROWSER_POOL_SIZE: ${BROWSER_POOL_SIZE:-5}
   OPENAI_API_KEY: ${OPENAI_API_KEY}
   OPENAI_BASE_URL: ${OPENAI_BASE_URL}
-  LLM_DISABLE_THINKING: ${LLM_DISABLE_THINKING:-}
+  # Defaulted, unlike most entries here: this one is z.stringbool().optional()
+  # and zod rejects "", so forwarding an empty value would fail configSchema.parse
+  # and stop the container booting. "false" also keeps local LLM thinking enabled
+  # -- enable_thinking=false stalls requests on the Swift/Qwen3.8 template.
+  LLM_DISABLE_THINKING: ${LLM_DISABLE_THINKING:-false}
   LLM_SLOT_ID: ${LLM_SLOT_ID:-}
   LLM_LOCK_FILE: ${LLM_LOCK_FILE:-}
   MODEL_NAME: ${MODEL_NAME}
@@ -57,6 +73,13 @@ x-common-env: &common-env
   AUTUMN_SECRET_KEY: ${AUTUMN_SECRET_KEY}
   SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL}
   BULL_AUTH_KEY: ${BULL_AUTH_KEY}
+  # Worker admission control (services/system-monitor.ts): a worker takes a new
+  # job only while cpuUsage < MAX_CPU && memoryUsage < MAX_RAM. Usage is measured
+  # HOST-wide (systeminformation), not against the container's cgroup limit, so a
+  # co-resident llama-swap holding tens of GB of model weights can push the host
+  # past 0.8 and stall every worker. Raise these on a box shared with an LLM.
+  MAX_CPU: ${MAX_CPU:-0.95}
+  MAX_RAM: ${MAX_RAM:-0.95}
   TEST_API_KEY: ${TEST_API_KEY}
   SUPABASE_ANON_TOKEN: ${SUPABASE_ANON_TOKEN}
   SUPABASE_URL: ${SUPABASE_URL}
