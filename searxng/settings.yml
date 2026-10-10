@@ -32,17 +32,24 @@ outgoing:
   pool_connections: 20
   pool_maxsize: 10
 
-# DuckDuckGo is what Firecrawl already falls back to and it rate-limits hard.
-# Prefer engines that tolerate a residential egress IP; Google tends to block
-# datacentre ranges, so it is not listed first.
+# Engines probed from this egress IP on 2026-10-10 (q=..., engines=<one>):
+# answering: yahoo, "duckduckgo web", mwmbl. Blocked: duckduckgo (CAPTCHA), brave and
+# google cse (429, 180 s suspensions that slow every query), google ("access denied"),
+# qwant (CAPTCHA), bing (connection error), yep. Re-probe before re-enabling one:
+#   curl -G .../search --data-urlencode q=test --data-urlencode engines=<name> \
+#     --data-urlencode format=json | jq '.results|length, .unresponsive_engines'
 engines:
-  - name: duckduckgo
+  - name: yahoo
     disabled: false
-  - name: brave
+  - name: duckduckgo web
     disabled: false
-  - name: startpage
-    disabled: false
-  - name: mojeek
+  - name: mwmbl
     disabled: false
   - name: wikipedia
     disabled: false
+  - name: duckduckgo
+    disabled: true
+  - name: brave
+    disabled: true
+  - name: google cse
+    disabled: true
