@@ -353,6 +353,21 @@ const configSchema = z.object({
 
   // TypeSafe (Jev): judges search results for the `safe: true` filter.
   TYPESAFE_API_KEY: emptyStringAsUndefined(z.string().trim().min(1)),
+  // Root of the System One API, NOT the full endpoint: the SDK appends
+  // /v1/systemone itself, so a trailing /v1 would produce /v1/v1/systemone.
+  // Unset uses TypeSafe's own API; OpenCode Zen serves the identical endpoint
+  // at https://opencode.ai/zen, under the same key.
+  TYPESAFE_BASE_URL: emptyStringAsUndefined(z.string().url()),
+  // Model every System One call uses unless it overrides it. Unset keeps
+  // TypeSafe's default, "jev-latest". OpenCode Zen serves "jev-1.13" here;
+  // its "-free" variants are rejected outside the OpenCode client.
+  TYPESAFE_MODEL: emptyStringAsUndefined(z.string().trim().min(1)),
+  // Price for cost tracking, in USD per million input tokens (output is not
+  // billed by TypeSafe). 0 for a free tier, e.g. "jev-1.13-free" on Zen.
+  // https://docs.typesafe.ai/models — TypeSafe's "jev-latest" is $0.042.
+  TYPESAFE_INPUT_USD_PER_MTOK: emptyStringAsUndefined(
+    z.coerce.number().nonnegative(),
+  ),
 
   // Exchange (routed data sources service)
   FIRE_EXCHANGE_URL: z.url().optional(),

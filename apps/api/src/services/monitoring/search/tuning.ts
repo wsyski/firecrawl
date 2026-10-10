@@ -41,12 +41,24 @@ function hasVertex(): boolean {
   return Boolean(config.VERTEX_CREDENTIALS);
 }
 
+// With neither Google nor Vertex configured, fall back to the default provider
+// (config.MODEL_NAME + OPENAI_BASE_URL / OLLAMA_BASE_URL), which is how every
+// other LLM call in a self-hosted deployment is routed. Without this the
+// monitor judge could not run at all once Google's key was dropped.
+function defaultProviderAvailable(): boolean {
+  return Boolean(
+    config.MODEL_NAME || config.OLLAMA_BASE_URL || config.OPENAI_API_KEY,
+  );
+}
+
 export function hasLlmProvider(): boolean {
-  return hasVertex() || Boolean(geminiApiKey());
+  return hasVertex() || Boolean(geminiApiKey()) || defaultProviderAvailable();
 }
 
 export function googleModel(modelId: string) {
-  return getModel(modelId, hasVertex() ? "vertex" : "google");
+  if (hasVertex()) return getModel(modelId, "vertex");
+  if (geminiApiKey()) return getModel(modelId, "google");
+  return getModel(modelId);
 }
 
 export function googleProviderOptions(
@@ -54,6 +66,10 @@ export function googleProviderOptions(
   labels?: LlmUsageLabels,
 ) {
   const provider = hasVertex() ? "vertex" : "google";
+
+  // thinkingConfig and labels are Google-shaped; the fallback provider would
+  // ignore or reject them, so send nothing.
+  if (provider === "google" && !geminiApiKey()) return {};
 
   const options: GoogleLanguageModelOptions = {
     thinkingConfig: { thinkingLevel: "minimal" },

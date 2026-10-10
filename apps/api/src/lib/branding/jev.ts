@@ -19,10 +19,13 @@ import { BrandingLLMInput } from "./types";
 // returns calibrated probabilities. It cannot generate text, so every branding
 // decision is posed as a pick from options built here, and the answers are
 // mapped back onto the same BrandingEnhancement the gpt-4o call returns.
-const JEV_MODEL = "jev-latest";
-// https://docs.typesafe.ai/models (2026-09-28): $0.042 per million input
-// tokens, output tokens are not billed.
-const JEV_INPUT_USD_PER_MTOK = 0.042;
+const DEFAULT_JEV_MODEL = "jev-latest";
+// TYPESAFE_MODEL points the call at another provider's Jev (e.g. OpenCode
+// Zen's "jev-1.13"); unset keeps TypeSafe's own alias.
+const jevModel = (): string => config.TYPESAFE_MODEL ?? DEFAULT_JEV_MODEL;
+// Cost tracking only: TypeSafe does not bill output tokens. Unset keeps
+// TypeSafe's own "jev-latest" rate; set 0 for a free tier.
+const DEFAULT_JEV_INPUT_USD_PER_MTOK = 0.042;
 const DEFAULT_TIMEOUT_MS = 5000;
 
 // Circuit breaker: after this many calls in a row fail (timeouts, 5xx), skip
@@ -907,7 +910,7 @@ export async function enhanceBrandingWithJev(
         called = true;
         const result = await typesafe.systemOne(
           {
-            model: JEV_MODEL,
+            model: jevModel(),
             state: request.state,
             questions: request.questions,
           },
@@ -960,8 +963,12 @@ export async function enhanceBrandingWithJev(
   input.costTracking.addCall({
     type: "other",
     metadata: { module: "branding", method: "enhanceBrandingWithJev" },
-    model: response.model || JEV_MODEL,
-    cost: (inputTokens * JEV_INPUT_USD_PER_MTOK) / 1_000_000,
+    model: response.model || jevModel(),
+    cost:
+      (inputTokens *
+        (config.TYPESAFE_INPUT_USD_PER_MTOK ??
+          DEFAULT_JEV_INPUT_USD_PER_MTOK)) /
+      1_000_000,
     tokens: { input: inputTokens, output: outputTokens },
   });
 
