@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "firecrawl-integration-test",
-    "description": "Examples for the local Docker Compose Firecrawl stack, configured with a local Open APi LLM backend. See docs/superpowers/specs/2026-07-11-local-docker-lmstudio-design.md for setup context.\n\nNo auth headers needed against {{baseUrl}} — USE_DB_AUTHENTICATION=false in .env for this local stack.",
+    "description": "Examples for the local Docker Compose Firecrawl stack, configured with a local Open APi LLM backend. See docs/superpowers/specs/2026-07-11-local-docker-lmstudio-design.md for setup context.\n\nNo auth headers needed against {{baseUrl}} \u2014 USE_DB_AUTHENTICATION=false in .env for this local stack.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -78,7 +78,7 @@
                 "scrape"
               ]
             },
-            "description": "No LLM involved — pure fetch + markdown conversion. Good smoke test that doesn't depend on Open APi."
+            "description": "No LLM involved \u2014 pure fetch + markdown conversion. Good smoke test that doesn't depend on Open APi."
           }
         },
         {
@@ -116,7 +116,7 @@
                 "scrape"
               ]
             },
-            "description": "Routes the extraction through OPENAI_BASE_URL (Open APi) via Chat Completions. Local models are slow — expect ~15-30s. Response should have data.json.heading populated; if data.json is missing, check the api container logs for a coerceFieldsToFormats warning (schema mismatch) and cross-check Open APi's server log."
+            "description": "Routes the extraction through OPENAI_BASE_URL (Open APi) via Chat Completions. Local models are slow \u2014 expect ~15-30s. Response should have data.json.heading populated; if data.json is missing, check the api container logs for a coerceFieldsToFormats warning (schema mismatch) and cross-check Open APi's server log."
           }
         }
       ]
@@ -280,7 +280,7 @@
                 "extract"
               ]
             },
-            "description": "Firecrawl marks /v1/extract deprecated in favor of /v2/scrape. Its reranker (lib/extract/reranker.ts) is hardcoded to Gemini and does NOT route through Open APi — requires GOOGLE_GENERATIVE_AI_API_KEY to be set, falls back gracefully (logs a warning, returns empty relevance list) if that key is weak/missing rather than failing the whole request. Expect ~40-60s."
+            "description": "Firecrawl marks /v1/extract deprecated in favor of /v2/scrape. Its reranker (lib/extract/reranker.ts) is hardcoded to Gemini and does NOT route through Open APi \u2014 requires GOOGLE_GENERATIVE_AI_API_KEY to be set, falls back gracefully (logs a warning, returns empty relevance list) if that key is weak/missing rather than failing the whole request. Expect ~40-60s."
           }
         }
       ]
@@ -322,6 +322,96 @@
             "description": "Hits Open APi directly (not through the api container) to confirm it's reachable and which model(s) are loaded. Useful first check when a Scrape/JSON request times out."
           },
           "description": "Hits the Open APi / llama-swap backend directly, bypassing the api container, to confirm it is reachable and which model(s) are loaded. Useful first check when a Scrape/JSON request times out. Needs {{openApiKey}}: llama-swap answers 401 'unauthorized: invalid or missing API key' without it, so this fails when the key is blank."
+        },
+        {
+          "name": "Ask Jev directly (OpenCode Zen)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{typesafeApiKey}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"state\": \"Buy cheap followers and watch videos now\",\n  \"model\": \"{{jevModel}}\",\n  \"questions\": {\n    \"explicit\": {\n      \"type\": \"noul\",\n      \"instructions\": \"Is this adult content?\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{typesafeUrl}}/v1/systemone",
+              "host": [
+                "{{typesafeUrl}}"
+              ],
+              "path": [
+                "v1",
+                "systemone"
+              ]
+            },
+            "description": "Hits Jev through OpenCode Zen directly (not through Firecrawl) to confirm Zen is reachable, the key is accepted and which model answered. This is the same call apps/api/src/lib/typesafe.ts makes, so it separates a Jev or key problem from a Firecrawl problem.\n\nEdit `state` to move it along the scale: text here is deliberately benign, so `noul` should come back well under the 0.3 threshold in apps/api/src/search/safe-search.ts. The behavioural half - that an explicit result is actually dropped from /v2/search - is covered by the \"Search Safe Filter\" folder."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Jev is a fork addition and Firecrawl runs without it, so a missing key is",
+                  "// not a Firecrawl failure. The Postman cloud runner deliberately has no Zen",
+                  "// credential, where a hard 401 would report a problem that is not there.",
+                  "const key = (pm.variables.replaceIn('{{typesafeApiKey}}') || '').trim();",
+                  "if (!key) {",
+                  "  console.warn('typesafeApiKey is empty; skipping. postman/run.sh supplies it from .env.prod.');",
+                  "  pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', () => pm.response.to.have.status(200));",
+                  "",
+                  "const body = pm.response.json();",
+                  "pm.test('Response answers the question we asked', () => {",
+                  "  pm.expect(body).to.have.property('answers');",
+                  "  pm.expect(body.answers).to.have.property('explicit');",
+                  "  pm.expect(body.answers.explicit).to.have.property('noul');",
+                  "});",
+                  "",
+                  "const noul = body.answers && body.answers.explicit && body.answers.explicit.noul;",
+                  "pm.test('Score is a probability', () => {",
+                  "  pm.expect(noul, 'answers.explicit.noul was ' + JSON.stringify(noul)).to.be.a('number');",
+                  "  pm.expect(noul).to.be.within(0, 1);",
+                  "});",
+                  "",
+                  "pm.test('The configured model is the one that answered', () => {",
+                  "  pm.expect(body.model, 'response said model ' + JSON.stringify(body.model))",
+                  "    .to.eql(pm.variables.replaceIn('{{jevModel}}'));",
+                  "});",
+                  "",
+                  "pm.test('Benign text scored below the explicit threshold', () => {",
+                  "  // Mirrors EXPLICIT_THRESHOLD in apps/api/src/search/safe-search.ts.",
+                  "  pm.expect(noul, 'benign string scored ' + noul).to.be.below(0.3);",
+                  "});"
+                ]
+              }
+            }
+          ]
         }
       ]
     },
@@ -358,7 +448,7 @@
                 "queues"
               ]
             },
-            "description": "Set {{bullAuthKey}} in the environment to match BULL_AUTH_KEY in .env (not committed here — fill it in locally). Opens the Bull queue admin UI response."
+            "description": "Set {{bullAuthKey}} in the environment to match BULL_AUTH_KEY in .env (not committed here \u2014 fill it in locally). Opens the Bull queue admin UI response."
           },
           "description": "Queue admin UI, served straight from the api container. BULL_AUTH_KEY is a secret path segment rather than a credential, so a blank {{bullAuthKey}} gives 404, not an auth error. Pass it at runtime: --env-var bullAuthKey=<BULL_AUTH_KEY from .env>."
         }
