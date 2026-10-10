@@ -1,7 +1,10 @@
 .DS_Store
 /node_modules/
 /dist/
-.env
+# .env IS tracked: it is the shared, credential-free configuration for the
+# Compose stack. Credentials live in .env.prod, which is not tracked.
+.env.prod
+.env.local
 .env.bak*
 .env.*.bak
 *.csv

@@ -15,7 +15,14 @@ x-common-service: &common-service
   # ...) are unaffected. `required: false` keeps `docker compose config` working
   # on a checkout that has no .env yet.
   env_file:
+    # .env is tracked and holds the shared configuration; .env.prod is
+    # gitignored and holds credentials only. Loaded in this order, so a value in
+    # .env.prod wins - that is the only override mechanism, because an entry in
+    # `environment:` (x-common-env) beats env_file and would clobber a secret
+    # that interpolates empty.
     - path: .env
+      required: false
+    - path: .env.prod
       required: false
 
   restart: unless-stopped
@@ -48,7 +55,6 @@ x-common-env: &common-env
   CRAWL_CONCURRENT_REQUESTS: ${CRAWL_CONCURRENT_REQUESTS:-10}
   MAX_CONCURRENT_JOBS: ${MAX_CONCURRENT_JOBS:-5}
   BROWSER_POOL_SIZE: ${BROWSER_POOL_SIZE:-5}
-  OPENAI_API_KEY: ${OPENAI_API_KEY}
   OPENAI_BASE_URL: ${OPENAI_BASE_URL}
   # Defaulted, unlike most entries here: this one is z.stringbool().optional()
   # and zod rejects "", so forwarding an empty value would fail configSchema.parse
@@ -63,7 +69,6 @@ x-common-env: &common-env
   # TypeSafe Jev: the /search safe filter, and branding when BRANDING_JEV* selects
   # the team. TYPESAFE_BASE_URL is the API root (the SDK appends /v1/systemone);
   # TYPESAFE_MODEL overrides TypeSafe's "jev-latest", e.g. "jev-1.13-free" on Zen.
-  TYPESAFE_API_KEY: ${TYPESAFE_API_KEY:-}
   TYPESAFE_BASE_URL: ${TYPESAFE_BASE_URL:-}
   TYPESAFE_MODEL: ${TYPESAFE_MODEL:-}
   TYPESAFE_INPUT_USD_PER_MTOK: ${TYPESAFE_INPUT_USD_PER_MTOK:-}
@@ -72,7 +77,6 @@ x-common-env: &common-env
   GOOGLE_GENERATIVE_AI_API_KEY: ${GOOGLE_GENERATIVE_AI_API_KEY}
   AUTUMN_SECRET_KEY: ${AUTUMN_SECRET_KEY}
   SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL}
-  BULL_AUTH_KEY: ${BULL_AUTH_KEY}
   # Worker admission control (services/system-monitor.ts): a worker takes a new
   # job only while cpuUsage < MAX_CPU && memoryUsage < MAX_RAM. Usage is measured
   # HOST-wide (systeminformation), not against the container's cgroup limit, so a
