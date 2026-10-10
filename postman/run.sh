@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Run the Firecrawl integration collection against the local Docker stack.
 #
-# Neither Postman file carries a credential you need to keep out of git: the
-# collection is committed clean, the environment is untracked, and openApiKey,
-# bullAuthKey and typesafeApiKey are injected at run time from the same files
-# Compose uses - .env.prod for the secrets, .env for the endpoints.
+# The Postman environment is committed with every endpoint filled in, so only
+# the three credentials are missing from it. openApiKey, bullAuthKey and
+# typesafeApiKey are injected at run time from the same files Compose uses -
+# .env.prod for the secrets, .env for the endpoints.
 #
 #   ./postman/run.sh                      # everything
 #   ./postman/run.sh --folder "Queue Admin (optional)"
@@ -17,11 +17,9 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 env_file="${FIRECRAWL_ENV:-$here/../.env}"
 secrets_file="${FIRECRAWL_SECRETS:-$here/../.env.prod}"
 
-# The Postman environment is untracked because it holds real endpoints and keys.
-# A fresh clone has only the .example.json, which is enough: every credential is
-# injected below rather than read from here.
+# The committed environment carries every endpoint but leaves the three keys
+# blank; this is the untracked copy that has them, if you keep one.
 postman_env="${FIRECRAWL_POSTMAN_ENV:-$here/firecrawl-integration-test.postman_environment.json}"
-[[ -f "$postman_env" ]] || postman_env="$here/firecrawl-integration-test.postman_environment.example.json"
 
 # Read one key from a file without sourcing it, stripping optional quotes.
 # Missing file or missing key yields empty, which is checked below.

@@ -5,11 +5,9 @@
 # Compose stack. Credentials live in .env.prod, which is not tracked.
 .env.prod
 .env.local
-# The Postman environment holds real values (baseUrl, openApiUrl, and the keys
-# for llama-swap, Bull Board and Jev), so it is not tracked. The committed
-# .example.json next to it documents every variable; postman/run.sh falls back
-# to that when the real one is absent, so a fresh clone still runs.
-/postman/firecrawl-integration-test.postman_environment.json
+# The Postman environment is tracked with every endpoint filled in, but its three
+# keys are blank there. A copy carrying real keys stays untracked under a .prod
+# name; point postman/run.sh at it with FIRECRAWL_POSTMAN_ENV.
 /postman/firecrawl-integration-test.postman_environment.prod.json
 .env.bak*
 .env.*.bak
