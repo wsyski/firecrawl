@@ -6,8 +6,9 @@
 .env.prod
 .env.local
 # The Postman environment is tracked with every endpoint filled in, but its three
-# keys are blank there. A copy carrying real keys stays untracked under a .prod
-# name; point postman/run.sh at it with FIRECRAWL_POSTMAN_ENV.
+# keys are blank there. The untracked .prod copy carries the keys and is the one
+# deployed to Postman; postman/run.sh defaults to it, so local runs and the Postman
+# app see the same values. FIRECRAWL_POSTMAN_ENV selects the committed keyless copy.
 /postman/firecrawl-integration-test.postman_environment.prod.json
 .env.bak*
 .env.*.bak
