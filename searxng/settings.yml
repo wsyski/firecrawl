@@ -1,0 +1,48 @@
+# SearXNG settings for the local Firecrawl stack.
+#
+# Firecrawl's searxng provider (apps/api/src/search/v2/searxng.ts) does
+#   GET {SEARXNG_ENDPOINT}/search?q=...&format=json
+# so the JSON format MUST be enabled here. SearXNG ships with only `html`,
+# which is why a misconfigured instance returns 200 and zero results - the
+# response parses fine, it just has no .results array.
+use_default_settings: true
+
+general:
+  instance_name: "local firecrawl"
+  debug: false
+
+server:
+  # Bind on all interfaces so the api container can reach it over the compose
+  # network. Do NOT publish this port to the host: an open SearXNG on a LAN is
+  # an open proxy.
+  bind_address: "0.0.0.0"
+  port: 8080
+  secret_key: "local-compose-only-change-me-if-exposed"
+  limiter: false
+  image_proxy: false
+
+search:
+  formats:
+    - html
+    - json
+
+outgoing:
+  request_timeout: 6.0
+  max_request_timeout: 12.0
+  pool_connections: 20
+  pool_maxsize: 10
+
+# DuckDuckGo is what Firecrawl already falls back to and it rate-limits hard.
+# Prefer engines that tolerate a residential egress IP; Google tends to block
+# datacentre ranges, so it is not listed first.
+engines:
+  - name: duckduckgo
+    disabled: false
+  - name: brave
+    disabled: false
+  - name: startpage
+    disabled: false
+  - name: mojeek
+    disabled: false
+  - name: wikipedia
+    disabled: false

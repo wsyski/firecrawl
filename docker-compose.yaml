@@ -167,6 +167,22 @@ services:
     mem_limit: 8G
     memswap_limit: 8G
 
+  searxng:
+    # Search provider for /v2/search. Firecrawl's chain is fire-engine ->
+    # searxng -> DuckDuckGo (src/search/v2/index.ts), so this only has to
+    # return results; anything it misses still falls through to DuckDuckGo.
+    # No published port on purpose: an open SearXNG on the LAN is an open proxy.
+    image: searxng/searxng:latest
+    restart: unless-stopped
+    networks:
+      - backend
+    volumes:
+      # The settings.yml here is what enables `formats: [html, json]`; without
+      # it Firecrawl gets 200 responses carrying no results array.
+      - ./searxng:/etc/searxng:rw
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8080/
+
   redis:
     # NOTE: If you want to use Valkey (open source) instead of Redis (source available),
     # uncomment the Valkey statement and comment out the Redis statement.
