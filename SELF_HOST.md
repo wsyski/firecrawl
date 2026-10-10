@@ -37,14 +37,25 @@ the services and configuration match the revision you checked out.
 
 Get this baseline working before swapping backends or adding providers.
 
-The root `.env` overrides only variables referenced by `docker-compose.yaml`.
-Do not use `apps/api/.env.example` as a drop-in Compose contract.
+The root `.env` supplies every value the stack consumes: `docker-compose.yaml` passes the
+whole file into the API container with `env_file`, and separately lists the variables that
+have defaults in its `x-common-env` block. Copy `.env.example` to start from it. A key in
+neither place is silently ignored, which is how `TYPESAFE_API_KEY` and `MAX_RAM` once ran
+unset inside the container while looking configured.
+
+Do not use `apps/api/.env.example` as a drop-in Compose contract — that file documents the
+API running on its own, without the Compose stack.
 
 ## What the stack runs
 
 At this revision, Compose runs the Firecrawl API and workers, Playwright, Redis,
-RabbitMQ, NuQ PostgreSQL, and FoundationDB services for the optional queue
-backend. Only the API is published to the host by default, on port `3002`.
+RabbitMQ, NuQ PostgreSQL, and SearXNG for `/v2/search`. Only the API is published
+to the host by default, on port `3002`; SearXNG stays on the private Compose network
+because an open instance on your LAN is an open proxy.
+
+The FoundationDB services were removed from this fork as unused (`NUQ_BACKEND`
+defaults to Postgres). Re-add them alongside the `fdb-data` and `fdb-cluster-file`
+volumes and the API's `/var/fdb` mount before setting `NUQ_BACKEND=fdb`.
 
 Self-hosting gives you source and infrastructure control. You also own
 security, availability, capacity, upgrades, data retention, and compliance.
