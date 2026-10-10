@@ -1,6 +1,6 @@
 import axios from "axios";
 import { config } from "../../config";
-import { SearchV2Response, WebSearchResult } from "../../lib/entities";
+import { SearchResultType, SearchV2Response } from "../../lib/entities";
 import { logger } from "../../lib/logger";
 
 interface SearchOptions {
@@ -12,7 +12,27 @@ interface SearchOptions {
   safe?: boolean;
   num_results: number;
   page?: number;
+  type?: SearchResultType | SearchResultType[];
 }
+
+// SEARXNG_ENGINES/SEARXNG_CATEGORIES pin the web search only: an engine pin like
+// "yahoo,mwmbl" would leave the news and images categories with no engine to run.
+const categoryOf: Record<SearchResultType, string | undefined> = {
+  web: undefined,
+  news: "news",
+  images: "images",
+};
+
+const mappers: Record<SearchResultType, (a: any) => any> = {
+  web: a => ({ url: a.url, title: a.title, description: a.content }),
+  news: a => ({
+    url: a.url,
+    title: a.title,
+    snippet: a.content,
+    ...(a.publishedDate ? { date: a.publishedDate } : {}),
+  }),
+  images: a => ({ url: a.url, title: a.title, imageUrl: a.img_src }),
+};
 
 export async function searxng_search(
   q: string,
@@ -26,15 +46,19 @@ export async function searxng_search(
   const cleanedUrl = url.endsWith("/") ? url.slice(0, -1) : url;
   const finalUrl = cleanedUrl + "/search";
 
-  const fetchPage = async (page: number): Promise<WebSearchResult[]> => {
+  const fetchPage = async (
+    type: SearchResultType,
+    page: number,
+  ): Promise<any[]> => {
+    const category = categoryOf[type];
     const params = {
       q: q,
       language: options.lang,
       // gl: options.country, //not possible with SearXNG
       // location: options.location, //not possible with SearXNG
       // num: options.num_results, //not possible with SearXNG
-      engines: config.SEARXNG_ENGINES ?? "",
-      categories: config.SEARXNG_CATEGORIES ?? "",
+      engines: category ? "" : (config.SEARXNG_ENGINES ?? ""),
+      categories: category ?? config.SEARXNG_CATEGORIES ?? "",
       pageno: page,
       format: "json",
       // 2 = strict; omitted otherwise so the instance default applies
@@ -51,11 +75,7 @@ export async function searxng_search(
     const data = response.data;
 
     if (data && Array.isArray(data.results)) {
-      return data.results.map((a: any) => ({
-        url: a.url,
-        title: a.title,
-        description: a.content,
-      }));
+      return data.results.map(mappers[type]);
     }
 
     return [];
@@ -70,24 +90,31 @@ export async function searxng_search(
       1,
       Math.ceil(requestedResults / resultsPerPage),
     );
-    let webResults: WebSearchResult[] = [];
+    const types = options.type
+      ? Array.isArray(options.type)
+        ? options.type
+        : [options.type]
+      : (["web"] as SearchResultType[]);
+    const response: SearchV2Response = {};
 
-    for (let pageOffset = 0; pageOffset < pagesToFetch; pageOffset += 1) {
-      const pageResults = await fetchPage(startPage + pageOffset);
-      if (pageResults.length === 0) {
-        break;
+    for (const type of types) {
+      let results: any[] = [];
+      for (let pageOffset = 0; pageOffset < pagesToFetch; pageOffset += 1) {
+        const pageResults = await fetchPage(type, startPage + pageOffset);
+        if (pageResults.length === 0) {
+          break;
+        }
+        results = results.concat(pageResults);
+        if (results.length >= requestedResults) {
+          break;
+        }
       }
-      webResults = webResults.concat(pageResults);
-      if (webResults.length >= requestedResults) {
-        break;
+      if (results.length > 0) {
+        response[type] = results.slice(0, requestedResults);
       }
     }
 
-    return webResults.length > 0
-      ? {
-          web: webResults.slice(0, requestedResults),
-        }
-      : {};
+    return response;
   } catch (error) {
     logger.error(`There was an error searching for content`, { error });
     return {};

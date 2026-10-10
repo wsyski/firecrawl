@@ -78,8 +78,10 @@ export async function search({
         country,
         location,
         safe,
+        type,
       });
-      if (results.web && results.web.length > 0) return results;
+      if (results.web?.length || results.news?.length || results.images?.length)
+        return results;
     }
 
     logger.info("Using DuckDuckGo search");
