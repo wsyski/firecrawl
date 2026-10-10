@@ -53,3 +53,28 @@ engines:
     disabled: true
   - name: google cse
     disabled: true
+  # Developer (it/packages/repos): off by default upstream, answering here.
+  # github, stackoverflow, askubuntu, superuser, mdn, pypi, docker hub are on by default.
+  - name: npm
+    disabled: false
+  - name: pkg.go.dev
+    disabled: false
+  - name: lib.rs
+    disabled: false
+  - name: huggingface
+    disabled: false
+  - name: hackernews
+    disabled: false
+  # News: duckduckgo news, wikinews (default on) and qwant news answer. google news
+  # ("access denied"), reuters (HTTP error), bing news (connection error, as bing) and
+  # brave.news (crash) do not.
+  - name: qwant news
+    disabled: false
+  - name: google news
+    disabled: true
+  - name: reuters
+    disabled: true
+  - name: bing news
+    disabled: true
+  - name: brave.news
+    disabled: true
