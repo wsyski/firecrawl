@@ -32,15 +32,22 @@ curl -s -o /dev/null -w '%{http_code}\n' localhost:3002/v0/health/liveness   # e
 
 ## Toolchain gotchas
 
-- `pnpm` is not on `PATH`; use `corepack pnpm …`. `pnpm exec` first runs a dependency-status check that
-  currently aborts (the native `foundationdb` build fails without its client headers), so call the pinned
-  binaries directly:
+- `pnpm` is not on `PATH`; use `corepack pnpm …` from `apps/api` (which pins pnpm via `packageManager`).
+  `verifyDepsBeforeRun: false` in `apps/api/pnpm-workspace.yaml` keeps `pnpm exec` from re-running the
+  install, which fails on the native `foundationdb` build (no FoundationDB C client headers here). With it,
+  `corepack pnpm exec` and `corepack pnpm knip` both work. Calling the pinned binaries directly stays
+  equivalent if you prefer it:
   ```bash
   cd apps/api
+  corepack pnpm exec tsc --noEmit
+  corepack pnpm knip --cache
+  # or, bypassing pnpm entirely:
   node node_modules/vitest/vitest.mjs run src/lib/<file>.test.ts
   node node_modules/typescript-7/bin/tsc --noEmit
   node node_modules/knip/bin/knip.js --cache
   ```
+  Don't "fix" this by bumping pnpm: 11.4.0 (the upstream pin) and 12.10.1 fail identically, and a bump
+  rewrites `apps/api/package.json` plus ~158 lines of pnpm-self entries in the lockfile.
 - Two TypeScript versions are pinned: `pnpm build` uses `typescript` (= `@typescript/typescript6@6.0.2`);
   the `tsc-watch` dev scripts use `node_modules/typescript-7` (7.0.2). Never reference a global `tsc`.
 - `@mendable/firecrawl-rs` (Rust) builds during install; without a Rust toolchain every import fails to
@@ -64,8 +71,9 @@ When changing the API, follow this order:
 3. Run tests with the harness (from `apps/api/`, `pnpm` → `corepack pnpm`):
    - Single snip: `corepack pnpm harness pnpm exec vitest run src/__tests__/snips/v2/<file>.test.ts`
    - All snips: `corepack pnpm harness pnpm test:snips`
-   - Unit tests (colocated `*.test.ts`) need no harness. On this host `pnpm exec` aborts — use the direct
-     `node node_modules/vitest/vitest.mjs run …` form above
+   - Unit tests (colocated `*.test.ts`) need no harness:
+     `corepack pnpm exec vitest run src/lib/<file>.test.ts` (or the direct
+     `node node_modules/vitest/vitest.mjs run …` form above)
    - Don't start the server yourself for tests — the harness owns the stack ([DESIGN.md](DESIGN.md#test-infrastructure))
    - To run one snip against an already-running stack, see [DESIGN.md](DESIGN.md#running-one-snip-against-an-already-running-stack)
    - The full suite is slow; run only relevant tests locally and let CI run everything
