@@ -209,6 +209,11 @@ services:
       # Only used to build absolute result links; keep the port in step with
       # SEARXNG_PORT above.
       - SEARXNG_BASE_URL=http://localhost:3003/
+      # Keep ./searxng owned by the host user so settings.yml is editable in place.
+      # The image's entrypoint otherwise chowns it to its searxng user on every
+      # start (rootless: host uid 100976). SearXNG only reads it, and it is
+      # world-readable, so the entrypoint's ownership warning is expected.
+      - FORCE_OWNERSHIP=false
 
   redis:
     # NOTE: If you want to use Valkey (open source) instead of Redis (source available),

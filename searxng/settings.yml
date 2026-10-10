@@ -5,6 +5,13 @@
 # so the JSON format MUST be enabled here. SearXNG ships with only `html`,
 # which is why a misconfigured instance returns 200 and zero results - the
 # response parses fine, it just has no .results array.
+#
+# Editing: this file is owned by the host user (FORCE_OWNERSHIP=false in
+# docker-compose.yaml), so edit it in place, then apply with
+#   docker restart firecrawl-searxng-1
+# The Firecrawl api needs no restart; it inherits whatever engines this enables.
+# Firecrawl can only narrow them, via SEARXNG_ENGINES / SEARXNG_CATEGORIES /
+# SEARXNG_NEWS_CATEGORIES in .env.
 use_default_settings: true
 
 general:
@@ -12,9 +19,10 @@ general:
   debug: false
 
 server:
-  # Bind on all interfaces so the api container can reach it over the compose
-  # network. Do NOT publish this port to the host: an open SearXNG on a LAN is
-  # an open proxy.
+  # Bind on all interfaces inside the container. The host side is published on
+  # SEARXNG_BIND (.env, the LAN address), which makes this an open search proxy
+  # for the LAN: keep it off untrusted networks. (server.port is ignored here,
+  # see SEARXNG_PORT in docker-compose.yaml.)
   bind_address: "0.0.0.0"
   port: 3003
   secret_key: "local-compose-only-change-me-if-exposed"
