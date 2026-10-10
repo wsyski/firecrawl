@@ -363,7 +363,8 @@ const configSchema = z.object({
   // its "-free" variants are rejected outside the OpenCode client.
   TYPESAFE_MODEL: emptyStringAsUndefined(z.string().trim().min(1)),
   // Price for cost tracking, in USD per million input tokens (output is not
-  // billed by TypeSafe). 0 for a free tier, e.g. "jev-1.13-free" on Zen.
+  // billed by TypeSafe). Zen's paid "jev-1.13" is not free, so this is worth
+    // setting rather than left to TypeSafe's own rate.
   // https://docs.typesafe.ai/models — TypeSafe's "jev-latest" is $0.042.
   TYPESAFE_INPUT_USD_PER_MTOK: emptyStringAsUndefined(
     z.coerce.number().nonnegative(),

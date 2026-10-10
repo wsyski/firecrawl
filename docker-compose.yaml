@@ -68,7 +68,7 @@ x-common-env: &common-env
   OLLAMA_BASE_URL: ${OLLAMA_BASE_URL}
   # TypeSafe Jev: the /search safe filter, and branding when BRANDING_JEV* selects
   # the team. TYPESAFE_BASE_URL is the API root (the SDK appends /v1/systemone);
-  # TYPESAFE_MODEL overrides TypeSafe's "jev-latest", e.g. "jev-1.13-free" on Zen.
+  # TYPESAFE_MODEL overrides TypeSafe's "jev-latest", e.g. "jev-1.13" on Zen.
   TYPESAFE_BASE_URL: ${TYPESAFE_BASE_URL:-}
   TYPESAFE_MODEL: ${TYPESAFE_MODEL:-}
   TYPESAFE_INPUT_USD_PER_MTOK: ${TYPESAFE_INPUT_USD_PER_MTOK:-}

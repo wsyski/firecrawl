@@ -148,8 +148,8 @@ rather than the OpenAI provider.
 ```bash
 TYPESAFE_API_KEY=<zen key>
 TYPESAFE_BASE_URL=https://opencode.ai/zen   # API root; the SDK appends /v1/systemone itself
-TYPESAFE_MODEL=jev-1.13                     # or jev-1.13-free
-TYPESAFE_INPUT_USD_PER_MTOK=0.042           # cost tracking only; 0 for a free tier
+TYPESAFE_MODEL=jev-1.13                     # the free tier starts returning 429 once its quota is spent
+TYPESAFE_INPUT_USD_PER_MTOK=0.042           # cost tracking only
 ```
 
 `TYPESAFE_BASE_URL` is the **host root** — a trailing `/v1` produces `/v1/v1/systemone` and a 404, so
