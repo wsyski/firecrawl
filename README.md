@@ -30,7 +30,7 @@
 | Manual kill switch for all LLM calls | `LLM_LOCK_FILE=<path>` | `local-model.ts`, `docker-compose.yaml` |
 | 10-minute timeouts for JSON/extract requests (slow local models) | automatic | `apps/api/src/controllers/v1/types.ts` |
 | `restart: unless-stopped` on all long-running services | automatic | `docker-compose.yaml` |
-| Search via a local SearXNG instead of rate-limited DuckDuckGo | `SEARXNG_ENDPOINT=http://192.168.1.100:8080` | `.env`; SearXNG itself: `/opt/playground/searxng` |
+| Search via a local SearXNG instead of rate-limited DuckDuckGo | `SEARXNG_ENDPOINT=http://192.168.1.100:8888` | `.env`; SearXNG itself: `/opt/playground/searxng` |
 | Safe-search results filtered by Jev (TypeSafe) | `TYPESAFE_API_KEY`, `TYPESAFE_BASE_URL`, `TYPESAFE_MODEL` | `apps/api/src/lib/typesafe.ts` |
 
 All LLM-side behaviour lives in `localModelFetch` (`apps/api/src/lib/local-model.ts`), installed as the
@@ -115,7 +115,7 @@ deployment in `container/`, settings in `container/core-config/settings.yml`). I
 LAN address, and Firecrawl reaches it there:
 
 ```bash
-SEARXNG_ENDPOINT=http://192.168.1.100:8080   # in .env
+SEARXNG_ENDPOINT=http://192.168.1.100:8888   # in .env
 ```
 
 Bare calls against the instance — `/config`, a direct `/search`, the category knobs — are **not**
