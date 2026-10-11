@@ -61,9 +61,9 @@ API running on its own, without the Compose stack.
 ## What the stack runs
 
 At this revision, Compose runs the Firecrawl API and workers, Playwright, Redis,
-RabbitMQ, NuQ PostgreSQL, and SearXNG for `/v2/search`. Only the API is published
-to the host by default, on port `3002`; SearXNG stays on the private Compose network
-because an open instance on your LAN is an open proxy.
+RabbitMQ and NuQ PostgreSQL. Only the API is published to the host by default, on
+port `3002`. SearXNG, used by `/v2/search` via `SEARXNG_ENDPOINT`, runs as a
+separate project (`/opt/playground/searxng`).
 
 The FoundationDB services were removed from this fork as unused (`NUQ_BACKEND`
 defaults to Postgres). Re-add them alongside the `fdb-data` and `fdb-cluster-file`

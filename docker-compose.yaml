@@ -93,6 +93,7 @@ x-common-env: &common-env
   PROXY_SERVER: ${PROXY_SERVER}
   PROXY_USERNAME: ${PROXY_USERNAME}
   PROXY_PASSWORD: ${PROXY_PASSWORD}
+  # SearXNG runs as its own project: /opt/playground/searxng (container/docker-compose.yml).
   SEARXNG_ENDPOINT: ${SEARXNG_ENDPOINT}
   SEARXNG_ENGINES: ${SEARXNG_ENGINES}
   SEARXNG_CATEGORIES: ${SEARXNG_CATEGORIES}
@@ -173,47 +174,6 @@ services:
     cpus: 4.0
     mem_limit: 8G
     memswap_limit: 8G
-
-  searxng:
-    # Search provider for /v2/search. Firecrawl's chain is fire-engine ->
-    # searxng -> DuckDuckGo (src/search/v2/index.ts), so this only has to
-    # return results; anything it misses still falls through to DuckDuckGo.
-    # Reachable on the LAN, like llama-swap on 192.168.1.100:8081, so host-level
-    # consumers (Hermes) can use it without going through Firecrawl. SEARXNG_BIND
-    # is the address to publish on; it defaults to loopback, which keeps SearXNG
-    # private. Note SearXNG has no authentication: anything that can reach this
-    # address can search through it, so binding the LAN address makes this
-    # machine an open metasearch proxy for the network.
-    ports:
-      - "${SEARXNG_BIND:-127.0.0.1}:3003:3003"
-    # Pinned by digest, not :latest. A SearXNG release that changes the settings
-    # schema can stop honouring `formats: [html, json]`, and the symptom is 200
-    # responses with no results array - which reads as "search is broken" rather
-    # than "the image drifted". Version at this digest: 2026.10.9-f4822b3fc.
-    # To move: docker compose pull searxng, then
-    #   docker image inspect searxng/searxng:latest --format '{{index .RepoDigests 0}}'
-    # and replace the digest below, then confirm /v2/search still returns results.
-    image: searxng/searxng@sha256:85492ba800a861e3e8ff6014c430e81369fe6ca766a9990595f616d1ce95b272
-    restart: unless-stopped
-    networks:
-      - backend
-    volumes:
-      # The settings.yml here is what enables `formats: [html, json]`; without
-      # it Firecrawl gets 200 responses carrying no results array.
-      - ./searxng:/etc/searxng:rw
-    environment:
-      # The image entrypoint maps SEARXNG_PORT -> GRANIAN_PORT, and granian is
-      # what actually binds. settings.yml's `server.port` is ignored here, so
-      # this is the value that has to be right.
-      - SEARXNG_PORT=3003
-      # Only used to build absolute result links; keep the port in step with
-      # SEARXNG_PORT above.
-      - SEARXNG_BASE_URL=http://localhost:3003/
-      # Keep ./searxng owned by the host user so settings.yml is editable in place.
-      # The image's entrypoint otherwise chowns it to its searxng user on every
-      # start (rootless: host uid 100976). SearXNG only reads it, and it is
-      # world-readable, so the entrypoint's ownership warning is expected.
-      - FORCE_OWNERSHIP=false
 
   redis:
     # NOTE: If you want to use Valkey (open source) instead of Redis (source available),
