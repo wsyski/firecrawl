@@ -11,6 +11,11 @@ infrastructure, and toolchain quirks.
   thinking/slot/lock fields) and `apps/api/src/lib/generic-ai.ts` (installs it as the OpenAI provider's
   `fetch` when `OPENAI_BASE_URL` is local). Upstream merges are most likely to conflict in those two,
   plus `config.ts`, `controllers/v1/types.ts`, `docker-compose.yaml`, and the README fork section.
+- **Agent skill:** `skills/firecrawl/` is the source of truth for the `/firecrawl` skill in the user
+  hub (`~/.agents/skills/firecrawl`). It documents only what this instance does. After editing it, run
+  `skills/sync.sh sync`; `skills/sync.sh check` fails on drift. Upstream's build skills were removed
+  from `skills/`. If an upstream merge touches them, resolve the modify/delete conflict with `git rm`.
+  Rationale: [DESIGN.md](DESIGN.md#agent-skill).
 - `CLAUDE.md` is a one-line `@AGENTS.md` pointer — this file is the single source; don't fork it.
 - **Env:** root `.env` is **tracked** (shared config); `.env.prod` is gitignored (credentials) and wins.
   The API process reads `apps/api/.env`, which doesn't exist — source the root `.env` yourself outside
@@ -117,8 +122,8 @@ Never bypass knip with `--no-verify`; fix unused exports/files it reports, even 
 | Design notes / self-host docs | `DESIGN.md`, `SELF_HOST.md` |
 
 `firecrawl-cli/`, `firecrawl-skills/`, `firecrawl-workflows/`, `firecrawl-cli-skills/` are upstream
-README-only pointers to separate catalogs — no code. `skills/` is real and mirrored to `firecrawl/skills`
-by CI (`sync-skills-catalog.yml`); edit it there.
+README-only pointers to separate catalogs — no code. `skills/` holds the fork's local skill (see above);
+`sync-skills-catalog.yml` is guarded to run only in `firecrawl/firecrawl`.
 
 ## Style conventions
 

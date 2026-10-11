@@ -1,0 +1,223 @@
+#!/usr/bin/env python3
+"""Call the host's self-hosted Firecrawl API and print the part you asked for.
+
+Two things it does that a bare curl does not:
+
+  * Crawl and batch scrape are async. It polls until `status == "completed"`
+    (a crawl can show completed == total while still scraping) and follows
+    `next` pages.
+  * This instance answers `success: true` while silently dropping a format it
+    cannot produce (screenshot, mobile, ...). It prints `.data.warning` and any
+    requested field that came back missing to stderr, so a dropped format is
+    not read as an empty page.
+
+Stdlib only. No auth: the instance runs without keys.
+"""
+
+from __future__ import annotations
+import argparse
+import json
+import mimetypes
+import os
+import sys
+import time
+import urllib.error
+import urllib.request
+import uuid
+
+DEFAULT_URL = "http://192.168.1.100:3002"
+BASE = (os.environ.get("FIRECRAWL_API_URL") or DEFAULT_URL).rstrip("/")
+
+
+def die(msg: str) -> None:
+    print(f"fc: {msg}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def call(method: str, path: str, body: dict | None = None, timeout: int = 300,
+         raw: bytes | None = None, ctype: str = "application/json") -> dict:
+    data = raw if raw is not None else (json.dumps(body).encode() if body is not None else None)
+    req = urllib.request.Request(BASE + path, data=data, method=method,
+                                 headers={"Content-Type": ctype} if data else {})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8", "replace"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace")[:500]
+        die(f"HTTP {exc.code} from {path}: {detail}")
+    except urllib.error.URLError as exc:
+        die(f"cannot reach {BASE} ({exc.reason}); is the stack up? docker compose ps")
+    return {}
+
+
+def warn(doc: dict, wanted: list[str]) -> None:
+    if doc.get("warning"):
+        print(f"!! warning: {doc['warning']}", file=sys.stderr)
+    missing = [f for f in wanted if doc.get(f) in (None, "", [])]
+    if missing:
+        print(f"!! requested but missing: {', '.join(missing)}", file=sys.stderr)
+
+
+def emit(doc: dict, wanted: list[str]) -> None:
+    if len(wanted) == 1 and isinstance(doc.get(wanted[0]), str):
+        print(doc[wanted[0]])
+    else:
+        print(json.dumps({f: doc.get(f) for f in wanted}, indent=2, ensure_ascii=False))
+
+
+def scrape_body(a: argparse.Namespace) -> tuple[dict, list[str]]:
+    formats: list = a.formats.split(",")
+    wanted = list(formats)
+    if a.prompt or a.schema:
+        fmt = {"type": "json"}
+        if a.prompt:
+            fmt["prompt"] = a.prompt
+        if a.schema:
+            fmt["schema"] = json.loads(a.schema)
+        formats = [f for f in formats if f != "markdown"] + [fmt]
+        wanted = [f for f in wanted if f != "markdown"] + ["json"]
+    body = {"url": a.target, "formats": formats, "onlyMainContent": not a.all_content}
+    if a.wait:
+        body["waitFor"] = a.wait
+    return body, wanted
+
+
+def poll(path: str, a: argparse.Namespace) -> list[dict]:
+    deadline = time.time() + a.timeout
+    while True:
+        st = call("GET", path)
+        print(f".. {st.get('status')} {st.get('completed')}/{st.get('total')}", file=sys.stderr)
+        if st.get("status") == "completed":
+            break
+        if st.get("status") in ("failed", "cancelled"):
+            die(f"job {st.get('status')}: {path}")
+        if time.time() > deadline:
+            die(f"still {st.get('status')} after {a.timeout}s; poll GET {path}")
+        time.sleep(3)
+    docs = st.get("data") or []
+    while st.get("next"):
+        st = call("GET", st["next"].removeprefix(BASE))
+        docs += st.get("data") or []
+    return docs
+
+
+def print_docs(docs: list[dict], a: argparse.Namespace) -> None:
+    if a.json:
+        print(json.dumps(docs, indent=2, ensure_ascii=False))
+        return
+    for d in docs:
+        print(f"\n===== {d.get('metadata', {}).get('sourceURL')}\n")
+        warn(d, ["markdown"])
+        print(d.get("markdown") or "")
+
+
+def multipart(path: str) -> tuple[bytes, str]:
+    boundary = uuid.uuid4().hex
+    ctype = mimetypes.guess_type(path)[0] or "application/octet-stream"
+    with open(path, "rb") as fh:
+        content = fh.read()
+    head = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; "
+            f"filename=\"{os.path.basename(path)}\"\r\nContent-Type: {ctype}\r\n\r\n")
+    return head.encode() + content + f"\r\n--{boundary}--\r\n".encode(), \
+        f"multipart/form-data; boundary={boundary}"
+
+
+def main() -> None:
+    p = argparse.ArgumentParser(prog="fc", description=f"Self-hosted Firecrawl at {BASE} (FIRECRAWL_API_URL).")
+    p.add_argument("--json", action="store_true", help="raw JSON response")
+    p.add_argument("--timeout", type=int, default=300, help="seconds to wait for async jobs")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    s = sub.add_parser("scrape", help="one URL to markdown / other formats / LLM json")
+    s.add_argument("target")
+    s.add_argument("-f", "--formats", default="markdown", help="markdown,html,rawHtml,links,summary")
+    s.add_argument("--wait", type=int, help="waitFor ms, for JS pages")
+    s.add_argument("--all-content", action="store_true", help="keep nav/footer (onlyMainContent off)")
+    s.add_argument("--prompt", help="LLM json extraction prompt")
+    s.add_argument("--schema", help="JSON schema string for LLM extraction")
+
+    q = sub.add_parser("search", help="web/news/images search via SearXNG")
+    q.add_argument("query")
+    q.add_argument("-n", "--limit", type=int, default=5)
+    q.add_argument("--sources", default="web", help="web,news,images")
+    q.add_argument("--tbs", help="qdr:d | qdr:w | qdr:m")
+    q.add_argument("--safe", action="store_true", help="drop explicit hits (Jev)")
+    q.add_argument("--scrape", action="store_true", help="add markdown of each hit")
+
+    m = sub.add_parser("map", help="list URLs of a site")
+    m.add_argument("target")
+    m.add_argument("-n", "--limit", type=int, default=200)
+
+    c = sub.add_parser("crawl", help="crawl a site section, wait, print markdown")
+    c.add_argument("target")
+    c.add_argument("-n", "--limit", type=int, default=10)
+    c.add_argument("--include", action="append", help="path regex, e.g. '^/docs/.*' (repeatable)")
+
+    b = sub.add_parser("batch", help="scrape several URLs, wait, print markdown")
+    b.add_argument("urls", nargs="+")
+
+    f = sub.add_parser("parse", help="local file (HTML, PDF) to markdown")
+    f.add_argument("file")
+
+    a = p.parse_args()
+
+    if a.cmd == "scrape":
+        body, wanted = scrape_body(a)
+        r = call("POST", "/v2/scrape", body)
+        if a.json:
+            print(json.dumps(r, indent=2, ensure_ascii=False))
+            return
+        doc = r.get("data") or {}
+        warn(doc, wanted)
+        emit(doc, wanted)
+    elif a.cmd == "search":
+        body = {"query": a.query, "limit": a.limit, "sources": a.sources.split(",")}
+        if a.tbs:
+            body["tbs"] = a.tbs
+        if a.safe:
+            body["safe"] = True
+        if a.scrape:
+            body["scrapeOptions"] = {"formats": ["markdown"]}
+        r = call("POST", "/v2/search", body)
+        if a.json:
+            print(json.dumps(r, indent=2, ensure_ascii=False))
+            return
+        data = r.get("data") or {}
+        if not any(data.get(src) for src in body["sources"]):
+            print("!! no results; usually SearXNG engines failed, not 'nothing exists' - check /searxng", file=sys.stderr)
+        for src in body["sources"]:
+            for i, hit in enumerate(data.get(src) or [], 1):
+                print(f"[{src} {i}] {hit.get('title')}\n    {hit.get('url') or hit.get('imageUrl')}")
+                if hit.get("description"):
+                    print(f"    {hit['description'][:200]}")
+                if a.scrape and hit.get("markdown"):
+                    print(hit["markdown"])
+    elif a.cmd == "map":
+        r = call("POST", "/v2/map", {"url": a.target, "limit": a.limit})
+        if a.json:
+            print(json.dumps(r, indent=2, ensure_ascii=False))
+            return
+        for link in r.get("links") or []:
+            print(link.get("url") if isinstance(link, dict) else link)
+    elif a.cmd == "crawl":
+        body = {"url": a.target, "limit": a.limit, "scrapeOptions": {"formats": ["markdown"]}}
+        if a.include:
+            body["includePaths"] = a.include
+        job = call("POST", "/v2/crawl", body)
+        print(f".. crawl {job.get('id')}", file=sys.stderr)
+        print_docs(poll(f"/v2/crawl/{job.get('id')}", a), a)
+    elif a.cmd == "batch":
+        job = call("POST", "/v2/batch/scrape", {"urls": a.urls, "formats": ["markdown"]})
+        print(f".. batch {job.get('id')}", file=sys.stderr)
+        print_docs(poll(f"/v2/batch/scrape/{job.get('id')}", a), a)
+    elif a.cmd == "parse":
+        raw, ctype = multipart(a.file)
+        r = call("POST", "/v2/parse", raw=raw, ctype=ctype)
+        if a.json:
+            print(json.dumps(r, indent=2, ensure_ascii=False))
+            return
+        print((r.get("data") or {}).get("markdown") or "")
+
+
+if __name__ == "__main__":
+    main()

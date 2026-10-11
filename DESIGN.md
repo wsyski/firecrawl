@@ -92,6 +92,23 @@ Preflight distinguishes a hard stop (missing `OPENAI_API_KEY`, `BULL_AUTH_KEY` o
 warning (missing `TYPESAFE_API_KEY`), because the latter surfaces only as a bare 401 from Zen on the Jev
 requests. It execs `newman` with secrets on the command line.
 
+## Agent skill
+
+`skills/firecrawl/` is a single listed (`/firecrawl`-only) skill. It uses curl, with no key, against
+`192.168.1.100:3002`. It replaces two upstream families:
+- the build skills that lived in `skills/` (SDK onboarding, API keys, cloud endpoints);
+- the hub's 9-skill `firecrawl/cli` set.
+
+Both described cloud Firecrawl. Here there is no auth and no fire-engine, so screenshots, actions,
+browser/interact and agent don't exist. LLM formats run on the local model. Every command in the skill
+was run against this instance; the unsupported list comes from the same probe.
+
+The skill describes this deployment, so it lives next to it and is mirrored into `~/.agents/skills/`
+by `skills/sync.sh`. That inverts the hub's "~/.agents is the source of truth" rule, as
+`/opt/playground/searxng` does. Without the hub, `check` skips instead of failing, so CI is unaffected.
+The skill has no `routes`/`requires` in `~/.agents/manual-skills.json`. With them, `/skill-sync` would
+stamp a generated block into the hub copy and `check` would report drift permanently.
+
 ## Toolchain and environment quirks
 
 - **Two TypeScript versions pinned.** `pnpm build` resolves `typescript` (aliased to `@typescript/typescript6@6.0.2`); the dev `tsc-watch` scripts use `./node_modules/typescript-7/bin/tsc` (TS 7.0.2). Don't install or reference a global `typescript` — both must resolve to the workspace-pinned versions.
