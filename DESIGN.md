@@ -39,18 +39,74 @@ Firecrawl does not pick the local model; llama-swap does. `MODEL_NAME=default` n
 
 `src/lib/local-model.ts` exports `localModelFetch`, installed as the OpenAI provider's `fetch` option only when `isLocalLlmUrl(OPENAI_BASE_URL)` (loopback, private/Tailscale IP, single-label or `*.local`/`*.lan`/`*.internal` host). It never touches `model`; it adds llama.cpp fields to chat bodies (`LLM_DISABLE_THINKING`, `LLM_SLOT_ID`) and enforces the `LLM_LOCK_FILE` kill switch. A cloud `OPENAI_BASE_URL` gets plain `fetch`, so requests go out exactly as the SDK builds them. Covered by `src/lib/local-model.test.ts`.
 
+## Configuration and environment files
+
+Three files, and the split is deliberate:
+
+| File | Tracked | Holds |
+|---|---|---|
+| `.env` (repo root) | yes | shared, credential-free config for the Compose stack |
+| `.env.prod` (repo root) | no | credentials only |
+| `apps/api/.env` | no | does not exist in this checkout |
+
+Compose's `env_file` on `x-common-service` lists `.env` then `.env.prod`, so `.env.prod` wins. That ordering
+is the *only* override mechanism: an entry in `environment:` (`x-common-env`) beats `env_file`, so putting
+a secret there would clobber it with an empty interpolated value. Conversely, because `env_file` passes every
+key through, a new `config.ts` variable works without being listed in `x-common-env` — the historical
+`TYPESAFE_*`/`MAX_RAM` unset failures predate that.
+
+The API process does **not** read the repo-root `.env`. `config.ts` and `index.ts` import `dotenv/config`,
+which reads `apps/api/.env` — a file that does not exist here. Running outside Compose therefore needs the
+root env sourced explicitly.
+
+## Search provider chain
+
+`/v2/search` tries fire-engine → SearXNG → DuckDuckGo (`src/search/v2/index.ts`). Each provider returns
+early only when it yields results, and the whole function catches and returns `{}`, so **every failure mode
+presents as "search returns nothing"** rather than an error. Debug by reading the `logger.info` line for the
+provider it actually took, not by looking for a thrown exception.
+
+SearXNG is not a service in this repo's `docker-compose.yaml`. It runs as a separate Compose project at
+`/opt/playground/searxng`, published on the LAN, and Firecrawl reaches it via `SEARXNG_ENDPOINT` in `.env`.
+CI (`.github/workflows/test-server.yml`) is upstream's self-host matrix and starts its *own* SearXNG
+container on `localhost:3434`, so a green CI run says nothing about the local `.env`.
+
+## Postman integration suite
+
+`postman/run.sh` is the fork's black-box smoke suite: `newman` against the collection in `postman/`, hitting
+the live API on `localhost:3002`. It therefore exercises whatever Compose last built, not the working tree —
+rebuild first. It resolves configuration from three sources:
+
+| What | Sources, in precedence order |
+|---|---|
+| credentials (`OPENAI_API_KEY`, `BULL_AUTH_KEY`, `TYPESAFE_API_KEY`) | shell export → `.env.prod` → the Postman environment file |
+| endpoints (`OPENAI_BASE_URL`, `TYPESAFE_BASE_URL`, `TYPESAFE_MODEL`) | shell export → `.env` |
+
+Two environment files exist and are not interchangeable. The committed
+`firecrawl-integration-test.postman_environment.json` has every endpoint filled in but blank keys; the
+untracked `.prod` copy carries `bullAuthKey`, `openApiKey` and `typesafeApiKey` and is the **default**, so a
+local run exercises the same values the Postman workspace sees. `FIRECRAWL_POSTMAN_ENV` forces the keyless
+copy, in which the Jev requests skip themselves and Bull Board / Open API model listing fail.
+
+Preflight distinguishes a hard stop (missing `OPENAI_API_KEY`, `BULL_AUTH_KEY` or `OPENAI_BASE_URL`) from a
+warning (missing `TYPESAFE_API_KEY`), because the latter surfaces only as a bare 401 from Zen on the Jev
+requests. It execs `newman` with secrets on the command line.
+
 ## Toolchain and environment quirks
 
 - **Two TypeScript versions pinned.** `pnpm build` resolves `typescript` (aliased to `@typescript/typescript6@6.0.2`); the dev `tsc-watch` scripts use `./node_modules/typescript-7/bin/tsc` (TS 7.0.2). Don't install or reference a global `typescript` — both must resolve to the workspace-pinned versions.
 - **Native Rust addon.** `@mendable/firecrawl-rs` builds during `pnpm install` and needs a Rust toolchain. Without it, native scraping features are skipped — and every module importing it fails to typecheck, which is the usual explanation for a burst of `Cannot find module '@mendable/firecrawl-rs'` errors.
 - **Go module.** `sharedLibs/go-html-to-md` is rebuilt by the harness on every run (`go mod tidy` + `go build`); a Go toolchain is required.
-- **`undici` pinned** to `7.28.0` via `package.json` overrides — don't upgrade it through normal means.
+- **`undici` pinned** to `7.30.0` — as a direct dependency in `apps/api/package.json` *and* re-pinned in the `overrides` block of `apps/api/pnpm-workspace.yaml`. Don't upgrade it through normal means.
 - **pnpm workspace.** No root `package.json`; each app has its own. Install from the repo root.
 - **FoundationDB backend.** Optional queue backend (`NUQ_BACKEND=fdb`); Postgres is the default and FDB is ignored.
 
 ### When `pnpm exec` fails on install
 
-`pnpm exec` runs a dependency check first and aborts the command if the install fails — currently the case in this checkout, where `foundationdb`'s node-gyp build errors out and leaves the native addon unbuilt. Call the pinned binaries directly to work around it:
+`pnpm exec` runs a dependency check first and aborts the command if the install fails — currently the case
+in this checkout, where `foundationdb`'s node-gyp build errors out and leaves the native addon unbuilt.
+`verifyDepsBeforeRun: false` in `apps/api/pnpm-workspace.yaml` keeps that from recurring once deps are in
+place. Call the pinned binaries directly to work around it:
 
 ```bash
 node node_modules/typescript-7/bin/tsc --noEmit
@@ -58,4 +114,9 @@ node node_modules/vitest/vitest.mjs run <file>
 node node_modules/knip/bin/knip.js --cache
 ```
 
-The Docker image builds fine regardless; the harness and the full snip suite do not run until the install is fixed.
+Do not "fix" this by bumping pnpm: 11.4.0 (the upstream pin) and 12.10.1 fail identically on the
+`foundationdb` build, and a bump rewrites `apps/api/package.json` plus ~158 lines of pnpm-self entries in the
+lockfile. Set `NUQ_BACKEND=pg` (the default) so nothing needs the FDB client.
+
+The Docker image builds fine regardless; the harness and the full snip suite do not run until the install is
+fixed.

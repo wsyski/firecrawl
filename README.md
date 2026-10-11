@@ -30,7 +30,7 @@
 | Manual kill switch for all LLM calls | `LLM_LOCK_FILE=<path>` | `local-model.ts`, `docker-compose.yaml` |
 | 10-minute timeouts for JSON/extract requests (slow local models) | automatic | `apps/api/src/controllers/v1/types.ts` |
 | `restart: unless-stopped` on all long-running services | automatic | `docker-compose.yaml` |
-| Search via a local SearXNG instead of rate-limited DuckDuckGo | `SEARXNG_ENDPOINT=http://searxng:9003` | `docker-compose.yaml`, `searxng/settings.yml` |
+| Search via a local SearXNG instead of rate-limited DuckDuckGo | `SEARXNG_ENDPOINT=http://192.168.1.100:8080` | `.env`; SearXNG itself: `/opt/playground/searxng` |
 | Safe-search results filtered by Jev (TypeSafe) | `TYPESAFE_API_KEY`, `TYPESAFE_BASE_URL`, `TYPESAFE_MODEL` | `apps/api/src/lib/typesafe.ts` |
 
 All LLM-side behaviour lives in `localModelFetch` (`apps/api/src/lib/local-model.ts`), installed as the
@@ -110,33 +110,20 @@ per query against this stack:
 | `react documentation` | 2/8 | 8/8 |
 | `open source web scraping tools` | 0/8 | 8/8 |
 
-SearXNG runs as a container on the private `backend` network with **no published port** — an open
-SearXNG on the LAN is an open proxy. Only `api` can reach it.
+SearXNG runs as its own Compose project, `/opt/playground/searxng` (a fork of upstream SearXNG;
+deployment in `container/`, settings in `container/core-config/settings.yml`, direct tests in
+`postman/searxng-integration-test.postman_collection.json`). It publishes on the LAN address, and
+Firecrawl reaches it there:
 
 ```bash
-SEARXNG_ENDPOINT=http://searxng:9003   # in .env
+SEARXNG_ENDPOINT=http://192.168.1.100:8080   # in .env
 ```
 
-Three places have to agree on the port, and the first one is the one that actually matters:
-
-| Where | Setting |
-|---|---|
-| `docker-compose.yaml` | `SEARXNG_PORT=9003` ← the image maps this to `GRANIAN_PORT`, and granian is what binds |
-| `docker-compose.yaml` | `SEARXNG_BASE_URL=http://localhost:9003/` (absolute result links) |
-| `searxng/settings.yml` | `server.port: 9003` (consistency; ignored by the image) |
-| `.env` | `SEARXNG_ENDPOINT=http://searxng:9003` |
-
-`searxng/settings.yml` must keep `formats: [html, json]` under `search:`. Firecrawl calls
+SearXNG has no authentication, so the LAN address makes it an open search proxy for that network.
+Its `settings.yml` must keep `formats: [html, json]` under `search:`. Firecrawl calls
 `/search?format=json`, and a default instance answers `200` with **no `results` array** — which looks
-like "search is broken" rather than a misconfiguration.
-
-The container chowns the bind-mounted `searxng/` directory to uid 100976, so edits need root inside
-the container:
-
-```bash
-docker compose exec -T -u root searxng sh -c "sed -i 's/…/…/' /etc/searxng/settings.yml"
-docker compose restart searxng
-```
+like "search is broken" rather than a misconfiguration. Engine choice lives there too; Firecrawl can
+only narrow it with `SEARXNG_ENGINES` / `SEARXNG_CATEGORIES` / `SEARXNG_NEWS_CATEGORIES`.
 
 #### Safe search with Jev
 

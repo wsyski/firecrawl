@@ -11,9 +11,11 @@ infrastructure, and toolchain quirks.
   thinking/slot/lock fields) and `apps/api/src/lib/generic-ai.ts` (installs it as the OpenAI provider's
   `fetch` when `OPENAI_BASE_URL` is local). Upstream merges are most likely to conflict in those two,
   plus `config.ts`, `controllers/v1/types.ts`, `docker-compose.yaml`, and the README fork section.
-- Config for Docker comes from the **repo-root `.env`** (not committed), not `apps/api/.env`. Local
-  model env: `MODEL_NAME`, `OPENAI_BASE_URL`, `LLM_DISABLE_THINKING`, `LLM_SLOT_ID`, `LLM_LOCK_FILE`.
-  Running the server directly from `apps/api` instead loads `apps/api/.env` via `dotenv/config`.
+- `CLAUDE.md` is a one-line `@AGENTS.md` pointer — this file is the single source; don't fork it.
+- **Env:** root `.env` is **tracked** (shared config); `.env.prod` is gitignored (credentials) and wins.
+  The API process reads `apps/api/.env`, which doesn't exist — source the root `.env` yourself outside
+  Compose. Rationale: [DESIGN.md](DESIGN.md#configuration-and-environment-files).
+  Local model env: `MODEL_NAME`, `OPENAI_BASE_URL`, `LLM_DISABLE_THINKING`, `LLM_SLOT_ID`, `LLM_LOCK_FILE`.
 
 ## Docker Compose deployment (primary run path)
 
@@ -28,57 +30,72 @@ curl -s -o /dev/null -w '%{http_code}\n' localhost:3002/v0/health/liveness   # e
 
 - The API container runs compiled code — rebuild it before testing a source change against it.
 - Compose builds `apps/api`, `apps/playwright-service-ts`, and `apps/nuq-postgres`; Redis is stock
-  `redis:alpine`. Runtime LLM kill switch: `touch /opt/llm/lock/llm.lock` / `rm` it (no restart needed).
+  `redis:alpine` and RabbitMQ is `rabbitmq:3-management`. Runtime LLM kill switch:
+  `touch /opt/llm/lock/llm.lock` / `rm` it (no restart needed).
+- **No `searxng` service here** — SearXNG is a separate Compose project at `/opt/playground/searxng`,
+  reached over the LAN via `SEARXNG_ENDPOINT` in `.env`. `/v2/search` falls back silently through
+  fire-engine → SearXNG → DuckDuckGo, so a broken SearXNG just returns no results. CI starts its own
+  SearXNG on `localhost:3434`; CI is not the local stack. ([DESIGN.md](DESIGN.md#search-provider-chain))
 
 ## Toolchain gotchas
 
-- `pnpm` is not on `PATH`; use `corepack pnpm …` from `apps/api` (which pins pnpm via `packageManager`).
-  `verifyDepsBeforeRun: false` in `apps/api/pnpm-workspace.yaml` keeps `pnpm exec` from re-running the
-  install, which fails on the native `foundationdb` build (no FoundationDB C client headers here). With it,
-  `corepack pnpm exec` and `corepack pnpm knip` both work. Calling the pinned binaries directly stays
-  equivalent if you prefer it:
+All commands run from `apps/api/`. `pnpm` is not on `PATH` — use `corepack pnpm …` (pins pnpm@11.4.0).
+
+- If `pnpm exec` aborts on a dependency re-check, call the pinned binaries directly instead:
   ```bash
-  cd apps/api
-  corepack pnpm exec tsc --noEmit
-  corepack pnpm knip --cache
-  # or, bypassing pnpm entirely:
-  node node_modules/vitest/vitest.mjs run src/lib/<file>.test.ts
   node node_modules/typescript-7/bin/tsc --noEmit
+  node node_modules/vitest/vitest.mjs run src/lib/<file>.test.ts
   node node_modules/knip/bin/knip.js --cache
   ```
-  Don't "fix" this by bumping pnpm: 11.4.0 (the upstream pin) and 12.10.1 fail identically, and a bump
-  rewrites `apps/api/package.json` plus ~158 lines of pnpm-self entries in the lockfile.
-- Two TypeScript versions are pinned: `pnpm build` uses `typescript` (= `@typescript/typescript6@6.0.2`);
-  the `tsc-watch` dev scripts use `node_modules/typescript-7` (7.0.2). Never reference a global `tsc`.
-- `@mendable/firecrawl-rs` (Rust) builds during install; without a Rust toolchain every import fails to
-  typecheck. The harness rebuilds `sharedLibs/go-html-to-md` each run, so Go is required.
+  Don't "fix" this by bumping pnpm — see [DESIGN.md](DESIGN.md#toolchain-and-environment-quirks).
+- Two TypeScript versions: `pnpm build` resolves `typescript` (= `@typescript/typescript6@6.0.2`), the
+  `tsc-watch` scripts use `node_modules/typescript-7` (7.0.2). Never reference a global `tsc`.
+- `@mendable/firecrawl-rs` (Rust) builds during install; without it every importing module fails to
+  typecheck. The harness rebuilds `sharedLibs/go-html-to-md`, so Go is required too.
 
 ## API test-driven workflow
 
-When changing the API, follow this order:
-
-1. Write or update end-to-end tests (called `snips`) that assert your win conditions
-   - 1 happy path (more if multiple distinct code paths); 1+ failure path(s)
-   - Snips live in `apps/api/src/__tests__/snips/v2/` (v1 also exists)
-   - Use `scrapeTimeout` (90s) from `../lib` for all scrape timeouts
-   - Gate tests that need external services with `describeIf`/`itIf`/`concurrentIf` from `../lib`:
+1. Write or update end-to-end tests (called `snips`) that assert your win conditions. Snips live in
+   `apps/api/src/__tests__/snips/v2/` (v1 also exists).
+   - 1 happy path (more per distinct code path); 1+ failure path(s).
+   - Helpers (`scrape`, `crawl`, `search`, `idmux`, `Identity`, ...) and `scrapeTimeout` (90s) come from
+     `./lib` (v2) or `../lib`.
+   - Gate external-service tests with `describeIf`/`itIf`/`concurrentIf` and the constants from `lib.ts`:
      `describeIf(TEST_PRODUCTION)` for fire-engine, `describeIf(HAS_AI)` for AI features,
-     `itIf(TEST_SELF_HOST && !HAS_FIRE_ENGINE)` for self-host-only paths. Never read `process.env` in a test.
-   - Helpers (`scrape`, `crawl`, `search`, `idmux`, `Identity`, ...) come from `./lib` (v2) or `../lib`.
+     `itIf(TEST_SELF_HOST && !HAS_FIRE_ENGINE)` for self-host-only. Never read `process.env` in a test.
 
-2. Write the implementation
+2. Write the implementation.
 
-3. Run tests with the harness (from `apps/api/`, `pnpm` → `corepack pnpm`):
+3. Run it (`pnpm` → `corepack pnpm`):
    - Single snip: `corepack pnpm harness pnpm exec vitest run src/__tests__/snips/v2/<file>.test.ts`
    - All snips: `corepack pnpm harness pnpm test:snips`
    - Unit tests (colocated `*.test.ts`) need no harness:
-     `corepack pnpm exec vitest run src/lib/<file>.test.ts` (or the direct
-     `node node_modules/vitest/vitest.mjs run …` form above)
-   - Don't start the server yourself for tests — the harness owns the stack ([DESIGN.md](DESIGN.md#test-infrastructure))
-   - To run one snip against an already-running stack, see [DESIGN.md](DESIGN.md#running-one-snip-against-an-already-running-stack)
-   - The full suite is slow; run only relevant tests locally and let CI run everything
+     `corepack pnpm exec vitest run src/lib/<file>.test.ts`
+   - Don't start the server yourself for tests — the harness owns the stack. To run one snip against an
+     already-running stack, see [DESIGN.md](DESIGN.md#running-one-snip-against-an-already-running-stack).
+   - The full suite is slow; run only relevant tests locally and let CI run everything.
 
 4. Push to a branch, open a PR, let CI verify.
+
+## Postman integration suite (against the running Compose stack)
+
+Black-box smoke suite hitting the live API on `localhost:3002` — rebuild Compose first, it does not use
+the working tree.
+
+```bash
+./postman/run.sh                              # everything
+./postman/run.sh --folder "Queue Admin (optional)"
+```
+
+- Defaults to the untracked `firecrawl-integration-test.postman_environment.prod.json` (the one deployed
+  to Postman, carrying the keys). `FIRECRAWL_POSTMAN_ENV` forces the committed keyless copy, in which the
+  Jev requests skip themselves and Bull Board / Open API model listing fail.
+- Credentials resolve shell export → `.env.prod` → the environment file; endpoints come from `.env`.
+  Paths overridable via `FIRECRAWL_ENV` / `FIRECRAWL_SECRETS` / `FIRECRAWL_POSTMAN_ENV`.
+- Missing `TYPESAFE_API_KEY` warns rather than aborts and surfaces as a bare 401 from Zen.
+- Secrets go on the `newman` command line; never echo that command back with values.
+
+Details: [DESIGN.md](DESIGN.md#postman-integration-suite).
 
 ## Pre-commit / lint
 
@@ -93,8 +110,15 @@ Never bypass knip with `--no-verify`; fix unused exports/files it reports, even 
 | Snips + shared helpers | `apps/api/src/__tests__/snips/v2/`, `.../snips/lib.ts` |
 | Harness (test infra) | `apps/api/src/harness.ts` |
 | Env schema | `apps/api/src/config.ts` |
+| Search providers + fallback chain | `apps/api/src/search/v2/index.ts` |
+| Fork LLM transport / Jev safe filter | `apps/api/src/lib/{local-model,generic-ai}.ts`, `src/search/safe-search.ts` |
+| Postman suite | `postman/run.sh`, `postman/firecrawl-integration-test.postman_collection.json` |
 | Vitest / Knip / Prettier / TS config | `apps/api/{vitest.config.ts,knip.config.ts,.prettierrc,tsconfig.json}` |
 | Design notes / self-host docs | `DESIGN.md`, `SELF_HOST.md` |
+
+`firecrawl-cli/`, `firecrawl-skills/`, `firecrawl-workflows/`, `firecrawl-cli-skills/` are upstream
+README-only pointers to separate catalogs — no code. `skills/` is real and mirrored to `firecrawl/skills`
+by CI (`sync-skills-catalog.yml`); edit it there.
 
 ## Style conventions
 
@@ -107,4 +131,5 @@ Never bypass knip with `--no-verify`; fix unused exports/files it reports, even 
 
 This project has no per-project vault (no `.claude-obsidian.json` at the root), so `/wiki-*` does not
 apply. Reference notes live in the general `KnowledgeBase` vault at `~/Documents/Obsidian/KnowledgeBase`
-— the local stack runbook is `docs/infrastructure/firecrawl-local-docker-llama-swap-setup.md`.
+— the local stack runbook is `docs/infrastructure/firecrawl-local-setup.md`; SearXNG (a separate
+project, `/opt/playground/searxng`) is `docs/infrastructure/searxng-local-setup.md`.
