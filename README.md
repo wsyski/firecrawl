@@ -122,8 +122,79 @@ SEARXNG_ENDPOINT=http://192.168.1.100:8080   # in .env
 SearXNG has no authentication, so the LAN address makes it an open search proxy for that network.
 Its `settings.yml` must keep `formats: [html, json]` under `search:`. Firecrawl calls
 `/search?format=json`, and a default instance answers `200` with **no `results` array** — which looks
-like "search is broken" rather than a misconfiguration. Engine choice lives there too; Firecrawl can
-only narrow it with `SEARXNG_ENGINES` / `SEARXNG_CATEGORIES` / `SEARXNG_NEWS_CATEGORIES`.
+like "search is broken" rather than a misconfiguration.
+
+##### What the empty knobs mean
+
+Three variables steer what SearXNG is asked for, and **an empty value means "no narrowing", not
+"nothing"**. The instance then uses its own defaults:
+
+```bash
+SEARXNG_ENGINES=            # empty -> every enabled engine in the chosen category
+SEARXNG_CATEGORIES=         # empty -> the `general` category
+SEARXNG_NEWS_CATEGORIES=news  # non-empty -> replaces the news category
+```
+
+The chain is: **the instance decides which engines exist, these decide which subset to ask for.**
+`/opt/playground/searxng/container/core-config/settings.yml` holds the first, `.env` here holds the
+second. Empty in both places means "every enabled `general` engine" — which is why the two files do
+not have to agree on anything to work.
+
+This is deliberate: SearXNG reads an empty `categories=` as *unspecified* and falls back to `general`
+(`searx/webadapter.py`, `get_selected_categories`). A non-empty value is a filter applied on top.
+
+Two consequences worth knowing:
+
+- A category with no enabled engines returns `200` with zero results and an **empty
+  `unresponsive_engines`** — no error anywhere. `currency` is currently exactly that. If a category
+  suddenly returns nothing, check `/config` before suspecting the query.
+- Results are deduplicated by URL. An enabled engine can be running and contribute nothing visible
+  because another engine already returned the same URLs. Read `/config`, not the result tally, to see
+  what is actually enabled.
+
+##### Choosing categories
+
+`SEARXNG_CATEGORIES` is a comma-separated list, so several can be grouped into one request. Measured
+against the live instance, results per single-category query:
+
+| `categories=` | Engines that answered |
+|---|---|
+| *(empty → `general`)* | mwmbl, duckduckgo web, yahoo, wikipedia |
+| `news` | duckduckgo news, qwant news, wikinews |
+| `it` | stackoverflow, askubuntu, superuser, mdn, github, npm, lib.rs, hoogle, docker hub |
+| `packages` | npm, crates.io, packagist, pub.dev, hex, lib.rs, hoogle, docker hub |
+| `repos` | github, gitlab, codeberg, gitea, huggingface, sourcehut |
+| `apps` | google play apps, apple app store, fdroid, apk mirror |
+| `software wikis` | gentoo, nixos wiki, minecraft wiki |
+| `science` | arxiv, pubmed, europepmc, google scholar, semantic scholar, pdbe |
+| `currency` | *(none enabled — returns empty)* |
+
+The developer categories are genuinely additive rather than a subset of `general`: `it`, `packages`
+and `repos` answer with github, npm, lib.rs and friends, none of which appear in a `general` search.
+
+For reference, the full category list is 33 entries — `/config` returns it as `categories`, which is
+more reliable than reading `settings.yml` in the SearXNG repo, since the running instance merges the
+defaults bundled in its pinned image rather than that working tree.
+
+##### Adding one now
+
+Nothing above needs a SearXNG change; it is `.env` plus an api recreate:
+
+```bash
+# .env — group the categories this deployment wants
+SEARXNG_CATEGORIES=news,it,packages,repos
+
+docker compose up -d --no-deps api    # recreate the api to pick up .env
+```
+
+Note the grouping is **per request, not per source**: `--sources web` sends `SEARXNG_CATEGORIES`,
+`--sources news` sends `SEARXNG_NEWS_CATEGORIES`, and `--sources images` always sends `images`
+(`apps/api/src/search/v2/searxng.ts`, `categoryOf`). `SEARXNG_ENGINES` is deliberately dropped for
+news and images — an engine pin like `yahoo,mwmbl` would leave those categories with nothing to run.
+
+There is **no finance category**. SearXNG ships no market or financial-data engine, so
+`SEARXNG_CATEGORIES=currency` returns nothing. Financial queries have to go through `general` and rely
+on the web engines, or be added to that project's `settings.yml` as a new engine.
 
 #### Safe search with Jev
 
