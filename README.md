@@ -111,13 +111,18 @@ per query against this stack:
 | `open source web scraping tools` | 0/8 | 8/8 |
 
 SearXNG runs as its own Compose project, `/opt/playground/searxng` (a fork of upstream SearXNG;
-deployment in `container/`, settings in `container/core-config/settings.yml`, direct tests in
-`postman/searxng-integration-test.postman_collection.json`). It publishes on the LAN address, and
-Firecrawl reaches it there:
+deployment in `container/`, settings in `container/core-config/settings.yml`). It publishes on the
+LAN address, and Firecrawl reaches it there:
 
 ```bash
 SEARXNG_ENDPOINT=http://192.168.1.100:8080   # in .env
 ```
+
+Bare calls against the instance — `/config`, a direct `/search`, the category knobs — are **not**
+in this collection. They belong with the instance, in that repo's
+`searxng-integration-test` collection, which also carries the fork's `liferay forum` engine test.
+This collection holds only what Firecrawl does with SearXNG, plus the browser-dependent sources
+below.
 
 SearXNG has no authentication, so the LAN address makes it an open search proxy for that network.
 Its `settings.yml` must keep `formats: [html, json]` under `search:`. Firecrawl calls
@@ -195,6 +200,48 @@ news and images — an engine pin like `yahoo,mwmbl` would leave those categorie
 There is **no finance category**. SearXNG ships no market or financial-data engine, so
 `SEARXNG_CATEGORIES=currency` returns nothing. Financial queries have to go through `general` and rely
 on the web engines, or be added to that project's `settings.yml` as a new engine.
+
+##### External sources scraped through Firecrawl
+
+Sites that render client-side cannot be SearXNG engines — no quote page below is reachable over
+plain HTTP — so they are Firecrawl scrapes, asserted in
+`postman/firecrawl-integration-test.postman_collection.json` under
+`SearXNG (local search provider)` → `External sources (Firecrawl scrape)`. That collection is the
+receipt: a source without a request in it has not been verified. Each carries its robots verdict, so
+the next agent does not re-probe a source that is prohibited.
+
+| Source | URL shape | Yields |
+|---|---|---|
+| money.pl | `/gielda/spolki-gpw/{isin}.html` | OHLC + `Wskaźniki`: C/Z, C/WK, kapitalizacja, liczba akcji, free float. ISIN-keyed, so stable across ticker changes |
+| biznesradar.pl | `/notowania/{SYMBOL}` | Kurs, Otwarcie, Min, Max, Wolumen, Obrót, Transakcje, Kapitalizacja. The only clean symbol URL |
+| parkiet.com | `/firmy/{id}-{slug}` | Share count, free float, dividend, returns over 1M/3M/6M/1R/5L, ISIN. **No symbol URL** — `/notowania/pepco` 404s |
+| bankier.pl | `…/quote.html?symbol=` | OHLC, volume, market cap, plus related news links |
+| biznes.pap.pl | front page | Polish Press Agency business wire; 306 article links. robots.txt disallows `/search/`, so it is front-page only |
+
+They **cross-check**, which is the reason to trust the set: money.pl and bankier independently
+report `Wolumen 858 575` for PCO, and all four agree on ~43.82 price and ~25.3bn market cap for the
+same session.
+
+**Two properties to expect.** parkiet.com and money.pl each serve two page variants — the OHLC
+block appears on one and not the other (13768 vs 17903 bytes for money.pl, on consecutive scrapes
+of the same URL). A parser asserting `Otwarcie` passes or fails by luck, so the assertions target
+the fields common to both. And money.pl reports free float 28.03% where parkiet reports 0.00%, so
+parkiet's looks like a data gap rather than a real value.
+
+**Excluded after testing**, with the reason recorded so they are not re-probed:
+
+| Source | Why not |
+|---|---|
+| stooq.pl | `robots.txt` is `User-agent: *` / `Disallow: /`, allow-listed to Googlebot and Bingbot only. Also behind a JS proof-of-work wall |
+| Google Finance | robots permits `/finance` and the scrape returns 200, but it renders page chrome and **no quote data** at any wait — both symbol orders and a 12 s wait tried |
+| Bloomberg | `AAPL:US` (control) returns 500 `SCRAPE_ALL_ENGINES_FAILED`, `PEPCO:WA` 404s, and `/search` is disallowed so the right symbol cannot be looked up. Subscription-gated besides |
+| gpw.pl | robots permits it; DNS resolves and the connection fails from this host |
+| massive.com | robots permissive, but `api.polygon.io` and `api.massive.com` return `401 "API Key was not provided"`; US-focused, so GPW names are likely out of coverage |
+| investing.com | the scrape works (50 KB, Prev. Close/Volume/Market Cap/PLN/Warsaw/WSE) but `robots.txt` returns **403 from Cloudflare** — bot management, not a published policy. Unlike every source above it publishes none. Deferred, not rejected; four adopted sources already cross-check |
+
+Note the distinction that matters for the deferred one: parkiet and biznesradar also block AI
+*training* crawlers by name while allowing `User-agent: *`. investing.com serves no robots policy at
+all and is actively resisting automated access, which is a different posture.
 
 #### Safe search with Jev
 
