@@ -16,6 +16,12 @@ infrastructure, and toolchain quirks.
   `skills/sync.sh sync`; `skills/sync.sh check` fails on drift. Upstream's build skills were removed
   from `skills/`. If an upstream merge touches them, resolve the modify/delete conflict with `git rm`.
   Rationale: [DESIGN.md](DESIGN.md#agent-skill).
+- **Skill validation:** every `SKILL.md` is linted by agnix (`.agnix.toml` + the `node:test` case in
+  `.github/scripts/skill-validate.test.mjs`, run by the CI Scripts Check workflow). `.agnix.toml` names
+  the `claude-code` runtime rather than disabling AS-016 — the skill's nested `metadata.hermes` is valid
+  there and not under the generic target — and excludes `apps/**`, which is product code with no agent
+  config. Run it with `node --test .github/scripts/skill-validate.test.mjs`; without `uvx` it skips, and
+  CI turns that skip into a failure. Upstream has no `.agnix.toml`, so it is fork-only and merge-safe.
 - `CLAUDE.md` is a one-line `@AGENTS.md` pointer — this file is the single source; don't fork it.
 - **Env:** root `.env` is **tracked** (shared config); `.env.prod` is gitignored (credentials) and wins.
   The API process reads `apps/api/.env`, which doesn't exist — source the root `.env` yourself outside

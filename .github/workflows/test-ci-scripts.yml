@@ -7,12 +7,17 @@ on:
     paths:
       - .github/scripts/**
       - .github/workflows/test-ci-scripts.yml
+      # A skill or the agnix config changes what the skill-validity case asserts.
+      - .agnix.toml
+      - skills/**
   push:
     branches:
       - main
     paths:
       - .github/scripts/**
       - .github/workflows/test-ci-scripts.yml
+      - .agnix.toml
+      - skills/**
   workflow_dispatch:
 
 permissions:
@@ -30,5 +35,29 @@ jobs:
         with:
           node-version: 22
 
+      # uv for the skill-validity case below: `uvx` fetches agnix (a wheel with a prebuilt
+      # binary) so nothing is installed by hand. A runner without it would make that case SKIP,
+      # and a skipped validator is green without validating anything — the guard in the run step
+      # turns such a skip back into a failure.
+      - uses: astral-sh/setup-uv@v7
+
+      # node:test reports TAP here so the skip guard has one stable format to read (the default
+      # reporter follows the TTY and is not deterministic on a runner).
       - name: Run node:test suites
-        run: node --test ".github/scripts/**/*.test.mjs"
+        run: |
+          set -uo pipefail
+          log=$(mktemp)
+          status=0
+          node --test --test-reporter=tap ".github/scripts/**/*.test.mjs" 2>&1 | tee "$log" || status=$?
+          if [ "$status" -ne 0 ]; then
+            echo "::error::a CI-script suite failed (see above)"
+            exit "$status"
+          fi
+          # The skill-validity case SKIPS when agnix cannot be fetched. Fail instead: a
+          # validator that skipped validated nothing, which is the one outcome the case exists
+          # to prevent. The reason is printed above.
+          if grep -qE '^# skipped [1-9]' "$log"; then
+            echo "::error::a case SKIPPED — a skipped validator is green without validating anything."
+            grep -iE 'skip' "$log" || true
+            exit 1
+          fi

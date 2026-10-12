@@ -76,3 +76,6 @@ apps/api/src/lib/scrape-interact/*.md
 vitest.out
 
 tmp/
+
+# scratch dir the skill-validity probe writes into; removed on success, ignorable on a Ctrl-C
+.agnix-probe/
