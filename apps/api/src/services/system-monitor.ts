@@ -93,10 +93,11 @@ class SystemMonitor {
     }
 
     const memoryData = await si.mem();
-    const totalMemory = memoryData.total;
-    const availableMemory = memoryData.available;
-    const usedMemory = totalMemory - availableMemory;
-    const usedMemoryPercentage = usedMemory / totalMemory;
+    // Swap counts as capacity; with no swap this is plain RAM usage.
+    const usedMemory =
+      memoryData.total - memoryData.available + memoryData.swapused;
+    const usedMemoryPercentage =
+      usedMemory / (memoryData.total + memoryData.swaptotal);
 
     this.memoryUsageCache = usedMemoryPercentage;
     this.lastMemoryCheck = now;
