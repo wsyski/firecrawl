@@ -62,6 +62,17 @@ describe("searxng_search source types", () => {
     });
   });
 
+  it("forwards qdr tbs as SearXNG time_range", async () => {
+    await searxng_search("q", { num_results: 5, type: "news", tbs: "qdr:d" });
+    expect(get.mock.calls[0][1]!.params).toMatchObject({ categories: "news", time_range: "day" });
+  });
+
+  it("does not invent a time_range for qdr:h", async () => {
+    await searxng_search("q", { num_results: 5, type: "news", tbs: "qdr:h" });
+    const params = get.mock.calls[0][1]!.params as Record<string, unknown>;
+    expect(params.time_range).toBeUndefined();
+  });
+
   it("SEARXNG_NEWS_CATEGORIES replaces the news category", async () => {
     config.SEARXNG_NEWS_CATEGORIES = "news,science";
     try {

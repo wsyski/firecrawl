@@ -71,6 +71,14 @@ SearXNG is not a service in this repo's `docker-compose.yaml`. It runs as a sepa
 CI (`.github/workflows/test-server.yml`) is upstream's self-host matrix and starts its *own* SearXNG
 container on `localhost:3434`, so a green CI run says nothing about the local `.env`.
 
+**Source mapping.** `sources` reaches SearXNG as a category: `news` → `SEARXNG_NEWS_CATEGORIES` (here
+`news`), `images` → `images`, web → `SEARXNG_CATEGORIES` (empty, i.e. the instance default). `tbs` is
+forwarded as SearXNG `time_range` for `qdr:d/w/m/y`; `qdr:h` has no SearXNG bucket and is dropped.
+DuckDuckGo is a **web** fallback only: a news/images-only request that SearXNG cannot fill returns
+empty rather than DDG web rows, which used to appear under the wrong source. The local news + range
+path is currently empty because the only enabled range-capable news engine (`bing news`) returns no
+day/week results here; the portfolio therefore does not send `tbs` on news searches.
+
 ## Postman integration suite
 
 `postman/run.sh` is the fork's black-box smoke suite: `newman` against the collection in `postman/`, hitting

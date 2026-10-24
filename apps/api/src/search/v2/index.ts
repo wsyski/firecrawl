@@ -84,15 +84,23 @@ export async function search({
         return results;
     }
 
-    logger.info("Using DuckDuckGo search");
-    const ddgResults = await ddgSearch(query, num_results, {
-      tbs,
-      lang,
-      country,
-      proxy,
-      timeout,
-    });
-    if (ddgResults.web && ddgResults.web.length > 0) return ddgResults;
+    // DuckDuckGo is a WEB fallback. Returning its web rows for a news/images
+    // request would be a wrong-category answer, so only run it when the caller
+    // asked for web (or asked for no source at all).
+    const requested = type ? (Array.isArray(type) ? type : [type]) : ["web"];
+    if (requested.includes("web")) {
+      logger.info("Using DuckDuckGo search");
+      const ddgResults = await ddgSearch(query, num_results, {
+        tbs,
+        lang,
+        country,
+        proxy,
+        timeout,
+      });
+      if (ddgResults.web && ddgResults.web.length > 0) return ddgResults;
+    } else {
+      logger.info("DuckDuckGo fallback skipped: request has no web source");
+    }
 
     // Fallback to empty response
     return {};

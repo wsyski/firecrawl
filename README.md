@@ -101,9 +101,9 @@ The model server must listen on all interfaces, not only localhost, or the conta
 
 #### Search (SearXNG)
 
-`/v2/search` tries fire-engine → SearXNG → DuckDuckGo (`apps/api/src/search/v2/index.ts`). Only
-DuckDuckGo is reachable here, and it rate-limits hard enough to be unusable. Measured over 8 repeats
-per query against this stack:
+`/v2/search` tries fire-engine → SearXNG → DuckDuckGo (`apps/api/src/search/v2/index.ts`). SearXNG
+is the primary provider here; DuckDuckGo is the fallback for **web** searches and rate-limits hard
+enough to be unusable on its own. Measured over 8 repeats per query against this stack:
 
 | Query | DuckDuckGo only | with SearXNG |
 |---|---|---|
@@ -155,7 +155,8 @@ Two consequences worth knowing:
   suddenly returns nothing, check `/config` before suspecting the query.
 - Results are deduplicated by URL. An enabled engine can be running and contribute nothing visible
   because another engine already returned the same URLs. Read `/config`, not the result tally, to see
-  what is actually enabled.
+  what is actually enabled. DuckDuckGo is only a **web** fallback here: a news/images-only request
+  that SearXNG cannot fill returns empty rather than DDG web rows under the wrong source.
 
 ##### Choosing categories
 
@@ -165,7 +166,9 @@ against the live instance, results per single-category query:
 | `categories=` | Engines that answered |
 |---|---|
 | *(empty → `general`)* | mwmbl, duckduckgo web, yahoo, wikipedia |
-| `news` | duckduckgo news, qwant news, wikinews |
+| `news` | duckduckgo news, qwant news, wikinews, bing news (ranged queries: bing news only) |
+| `finance` | sii, dna rynkow, ksiazak, stooq |
+| `finance-poland` | the same four — Polish subset of `finance` |
 | `it` | stackoverflow, askubuntu, superuser, mdn, github, npm, lib.rs, hoogle, docker hub |
 | `packages` | npm, crates.io, packagist, pub.dev, hex, lib.rs, hoogle, docker hub |
 | `repos` | github, gitlab, codeberg, gitea, huggingface, sourcehut |
@@ -177,7 +180,7 @@ against the live instance, results per single-category query:
 The developer categories are genuinely additive rather than a subset of `general`: `it`, `packages`
 and `repos` answer with github, npm, lib.rs and friends, none of which appear in a `general` search.
 
-For reference, the full category list is 33 entries — `/config` returns it as `categories`, which is
+For reference, the full category list is 35 entries — `/config` returns it as `categories`, which is
 more reliable than reading `settings.yml` in the SearXNG repo, since the running instance merges the
 defaults bundled in its pinned image rather than that working tree.
 
@@ -197,9 +200,20 @@ Note the grouping is **per request, not per source**: `--sources web` sends `SEA
 (`apps/api/src/search/v2/searxng.ts`, `categoryOf`). `SEARXNG_ENGINES` is deliberately dropped for
 news and images — an engine pin like `yahoo,mwmbl` would leave those categories with nothing to run.
 
-There is **no finance category**. SearXNG ships no market or financial-data engine, so
-`SEARXNG_CATEGORIES=currency` returns nothing. Financial queries have to go through `general` and rely
-on the web engines, or be added to that project's `settings.yml` as a new engine.
+`finance` and `finance-poland` exist in this deployment (the four fork engines: `sii`,
+`dna rynkow`, `ksiazak`, `stooq`). They are opt-in: the engines are in no other category, so a
+default `general`/`news` query does not run them. `currency` is still empty — SearXNG ships no
+currency engine here.
+
+`sources` maps to a category per request: `news` → `SEARXNG_NEWS_CATEGORIES`, `images` → `images`,
+and web → `SEARXNG_CATEGORIES` (empty means the instance default). There is no per-request
+`finance`/`finance-poland` option and `--categories` is Firecrawl's own github/research/pdf filter;
+for Polish finance, call the SearXNG `/search` endpoint directly.
+
+**Time filters.** `tbs` is forwarded as SearXNG `time_range` for `qdr:d/w/m/y` (`qdr:h` is dropped).
+The news path is currently empty when a range is set: the only range-capable news engine here is
+`bing news`, and it returns no day/week rows while the others are dropped. The portfolio therefore
+does not send `tbs` on its news sweeps.
 
 ##### External sources scraped through Firecrawl
 

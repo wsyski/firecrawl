@@ -24,6 +24,15 @@ const categoryOf = (type: SearchResultType): string | undefined =>
       ? "images"
       : undefined;
 
+// SearXNG's time_range has no hour bucket; qdr:h is deliberately dropped rather
+// than sent as an unsupported value.
+const TIME_RANGES: Record<string, string> = {
+  "qdr:d": "day",
+  "qdr:w": "week",
+  "qdr:m": "month",
+  "qdr:y": "year",
+};
+
 const mappers: Record<SearchResultType, (a: any) => any> = {
   web: a => ({ url: a.url, title: a.title, description: a.content }),
   news: a => ({
@@ -62,6 +71,7 @@ export async function searxng_search(
       categories: category ?? config.SEARXNG_CATEGORIES ?? "",
       pageno: page,
       format: "json",
+      ...(TIME_RANGES[options.tbs ?? ""] ? { time_range: TIME_RANGES[options.tbs ?? ""] } : {}),
       // 2 = strict; omitted otherwise so the instance default applies
       ...(options.safe ? { safesearch: 2 } : {}),
     };

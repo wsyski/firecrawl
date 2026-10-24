@@ -81,8 +81,14 @@ curl -s $FC/v2/search -H 'Content-Type: application/json' \
   | jq '.data.web[] | {title, url, description}'
 ```
 
-- `sources`: `web`, `news`, `images` → `.data.web`, `.data.news`, `.data.images`.
-- `tbs`: `qdr:d`, `qdr:w`, `qdr:m` (day, week, month).
+- `sources`: `web`, `news`, `images` → `.data.web`, `.data.news`, `.data.images`. This is the SearXNG
+  category selector: `news` → `SEARXNG_NEWS_CATEGORIES`, `images` → `images`, web →
+  `SEARXNG_CATEGORIES`. `--categories` is Firecrawl's own github/research/pdf filter, **not** a
+  SearXNG category; `finance`/`finance-poland` cannot be chosen per request. Query SearXNG directly
+  for those.
+- `tbs`: `qdr:d`, `qdr:w`, `qdr:m`, `qdr:y` map to SearXNG `time_range`; `qdr:h` is dropped. A news-only
+  request never falls back to DuckDuckGo web rows. On this instance a ranged news query can be empty
+  (no reliable range-capable news engine), so omit `tbs` for the portfolio-style news sweeps.
 - `"safe":true` drops explicit hits by asking Jev (an external OpenCode Zen model, about 2–3 s
   extra). The free tier returns 429 once its quota is spent.
 - `"scrapeOptions":{"formats":["markdown"]}` adds page markdown to each hit (slower).
