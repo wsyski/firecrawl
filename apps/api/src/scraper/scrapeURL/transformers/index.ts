@@ -28,6 +28,10 @@ import { useIndex, useSearchIndex } from "../../../services/index";
 import { sendDocumentToIndex } from "../engines/index/index";
 import { sendDocumentToSearchIndex } from "./sendToSearchIndex";
 import { hasFormatOfType } from "../../../lib/format-utils";
+import {
+  addDroppedFormats,
+  findDroppedFormats,
+} from "../../../lib/dropped-formats";
 import { brandingTransformer } from "../../../lib/branding/transformer";
 import { indexerQueue } from "../../../services/indexing/indexer-queue";
 import { config } from "../../../config";
@@ -613,6 +617,21 @@ function coerceFieldsToFormats(meta: Meta, document: Document): Document {
     if (!hasScreenshots && !hasScrapes && !hasJsReturns && !hasPdfs) {
       delete document.actions;
     }
+  }
+
+  // Every branch above only logs a missing field, so a dropped format reaches
+  // the caller as success with the field simply absent. Report it in the
+  // document instead: droppedFormats to branch on, warning to read.
+  const dropped = findDroppedFormats(meta.options.formats, document);
+  if (dropped.length > 0) {
+    meta.logger.warn("Requested formats were not produced", { dropped });
+    addDroppedFormats(document, ...dropped);
+  }
+  if (document.droppedFormats?.length) {
+    const warning = `The following requested formats are not present in this result: ${document.droppedFormats.join(", ")}.`;
+    document.warning = document.warning
+      ? `${document.warning} ${warning}`
+      : warning;
   }
 
   return document;

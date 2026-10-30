@@ -1541,6 +1541,12 @@ export type Document = {
   product?: ProductProfile;
   menu?: MenuProfile;
   warning?: string;
+  /**
+   * Formats the caller asked for that this response does not carry. Present
+   * only when at least one was dropped, so its absence means nothing was.
+   * `warning` names the same formats in prose; this is the field to branch on.
+   */
+  droppedFormats?: FormatObject["type"][];
   attributes?: {
     selector: string;
     attribute: string;
@@ -2596,6 +2602,20 @@ const searchDomainSchema = z
     "Domain must be a valid hostname without protocol or path",
   );
 
+// Category names are instance configuration, not a fixed Firecrawl enum, so
+// the value is validated by shape rather than against a list: SearXNG's own
+// names use lowercase letters, digits, spaces, "&" and "-" ("q&a",
+// "stock images", "finance-poland").
+const searxngCategorySchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(200)
+  .regex(
+    /^[a-z0-9&\- ]+(,[a-z0-9&\- ]+)*$/,
+    "searxngCategory must be one or more comma-separated SearXNG category names",
+  );
+
 export const searchRequestSchema = z
   .strictObject({
     query: z.string(),
@@ -2643,6 +2663,15 @@ export const searchRequestSchema = z
     enterprise: z.array(z.enum(["default", "anon", "zdr"])).optional(),
     country: z.string().optional(),
     location: z.string().optional(),
+    /**
+     * A SearXNG category for this request, as the instance names it
+     * ("finance", "science", "finance-poland", ...). Distinct from
+     * `categories`, which is Firecrawl's own github/research/pdf filter.
+     * Only the SearXNG provider reads it; the categories a request actually
+     * used come back in `provenance.searxngCategories`. A comma-separated
+     * list is passed through as SearXNG accepts one.
+     */
+    searxngCategory: searxngCategorySchema.optional(),
     origin: z.string().prefault("api"),
     integration: integrationSchema.optional().transform(val => val || null),
     timeout: z.int().positive().finite().prefault(60000),
@@ -2835,6 +2864,7 @@ export type SearchResponse =
       success: true;
       warning?: string;
       data: import("../../lib/entities").SearchV2Response;
+      provenance?: import("../../search/v2/provenance").SearchProvenance;
       creditsUsed: number;
       id: string;
     }
@@ -2842,6 +2872,7 @@ export type SearchResponse =
       success: true;
       warning?: string;
       data: import("../../lib/entities").SearchV2Response;
+      provenance?: import("../../search/v2/provenance").SearchProvenance;
       scrapeIds: {
         web?: string[];
         news?: string[];

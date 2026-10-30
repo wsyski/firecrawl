@@ -59,25 +59,164 @@ The API process does **not** read the repo-root `.env`. `config.ts` and `index.t
 which reads `apps/api/.env` — a file that does not exist here. Running outside Compose therefore needs the
 root env sourced explicitly.
 
+## Dropped formats
+
+A scrape used to return `success: true` with a requested format's field simply
+absent: `coerceFieldsToFormats` logged "Request had format X, but there was no X
+field in the result" and nothing reached the caller. That is the root of the
+"check the field you asked for" gotcha, and the main source of silent failure
+for an API consumer — the local LLM being locked or unreachable drops `json` and
+`summary` exactly this way, by design (see the `LLM_LOCK_FILE` section of the
+README: the scrape still succeeds, just without the LLM formats).
+
+**The response now carries `data.droppedFormats`**, the list of formats the
+caller asked for that the document does not contain, and a sentence naming the
+same formats is appended to `data.warning`. Both are set at the end of
+`coerceFieldsToFormats` from `findDroppedFormats` (`src/lib/dropped-formats.ts`),
+which holds the format-to-field map — `json`/`deterministicJson` accept either
+`json` or `extract`, `question`/`query` both answer into `answer`, `video`
+accepts `video` or `videos`. The field is present **only when something was
+dropped**, so its absence means nothing was.
+
+One path needs its own call: a `BrandingNotSupportedError` on a non-HTML page
+filters `branding` out of `meta.options.formats` before the transformers run
+(`scrapeURL/index.ts`), so `coerceFieldsToFormats` no longer counts it as
+requested. That branch calls `addDroppedFormats(document, "branding")` next to
+the warning it already set.
+
+**Why a field and not an error.** Returning 4xx/5xx for a format that could not
+be produced was the other option, and it would break the callers this change
+exists for: a scrape that yields markdown but no `summary` because the local
+model was busy is a useful partial result today, and the portfolio project's
+cron jobs consume it. An error would also turn the LLM kill switch into a hard
+outage rather than graceful degradation. A caller that wants error-on-partial
+gets it in one line — `if (data.droppedFormats) throw` — whereas a caller that
+wants the partial result cannot recover it from a 4xx. Additive field, existing
+callers unchanged.
+
 ## Search provider chain
 
 `/v2/search` tries fire-engine → SearXNG → DuckDuckGo (`src/search/v2/index.ts`). Each provider returns
-early only when it yields results, and the whole function catches and returns `{}`, so **every failure mode
-presents as "search returns nothing"** rather than an error. Debug by reading the `logger.info` line for the
-provider it actually took, not by looking for a thrown exception.
+early only when it yields results, and the whole function catches rather than throwing, so **no failure
+mode surfaces as an error** — the response is still `success: true` with empty groups. What used to make
+that undebuggable was that the choice was invisible; it is now in the response, so read `provenance`
+(below) for which provider answered and why the others did not, rather than hunting for a thrown
+exception or grepping the `logger.info` line.
 
 SearXNG is not a service in this repo's `docker-compose.yaml`. It runs as a separate Compose project at
 `/opt/playground/searxng`, published on the LAN, and Firecrawl reaches it via `SEARXNG_ENDPOINT` in `.env`.
 CI (`.github/workflows/test-server.yml`) is upstream's self-host matrix and starts its *own* SearXNG
 container on `localhost:3434`, so a green CI run says nothing about the local `.env`.
 
+### Provenance
+
+The chain's silence was the second half of the same problem: each provider
+returned early only when it had results, the function caught everything and
+returned `{}`, and SearXNG's own `unresponsive_engines` was thrown away. An
+empty answer could therefore mean "nothing matched", "SearXNG was unreachable",
+"the upstream engines timed out" or "a different provider answered", with the
+`logger.info` line as the only way to tell.
+
+`/v2/search` now returns a **`provenance` object beside `data`** — not inside
+it, since it describes the request rather than a result group. `executeSearch`
+lifts it off the `SearchV2Response` the chain returns, so result counting,
+scraping, job logging and `data` itself are untouched:
+
+```json
+{ "success": true, "data": { "web": [] },
+  "provenance": {
+    "attempts": [
+      { "provider": "fire-engine", "outcome": "skipped", "detail": "FIRE_ENGINE_BETA_URL is not set" },
+      { "provider": "searxng", "outcome": "empty",
+        "unresponsiveEngines": [{ "engine": "google", "reason": "timeout" }] },
+      { "provider": "duckduckgo", "outcome": "empty" }
+    ],
+    "searxngCategories": { "web": "general" } } }
+```
+
+`unknownEngines` is the instance's `unknown_engines`: engine pins SearXNG did
+not recognise and silently ignored, which means the query actually ran against
+the category's whole engine set. The field is new in the LAN instance's own fork
+(observed live: `?engines=bing news,no such engine` →
+`unknown_engines: ["no such engine"]`), read through
+`normalizeUnknownEngines` so an instance that omits it simply reports none.
+
+`provider` names whichever attempt returned results and is absent when none
+did. `outcome` is one of `results` / `empty` / `error` / `skipped`, so both a
+fallthrough and a failure are visible; `searxng_search` returns its outcome
+instead of a bare `{}` for exactly this reason. Types live in
+`src/search/v2/provenance.ts`.
+
+**One caveat.** `outcome` is derived from `.results`, and SearXNG's answerer
+categories (`currency`, `weather`, `define`, `translate`) reply in `.answers`
+instead, which Firecrawl discards at the mapper. A `searxngCategory` naming one
+of those therefore reports `empty` for a query the instance did answer. The
+categories the portfolio needs (`finance`, `finance-poland`) return ordinary
+`.results` rows and are unaffected; passing `.answers` through is a separate
+change.
+
+`unresponsiveEngines` is SearXNG's `unresponsive_engines`, read by
+`normalizeUnresponsiveEngines` rather than cast. The live instance returns `[]`
+on a healthy query and the documented `[engine, reason]` pairs otherwise —
+`[["qwant news", "access denied"]]` on `categories=news`, which arrives here as
+`{ "engine": "qwant news", "reason": "Suspended: access denied" }` — but the
+shape has moved between SearXNG releases, and the LAN instance is a fork
+(`/opt/playground/searxng`) that may add fields of its own. The normalizer accepts a pair, a bare string or an
+object (`engine`/`name`, `reason`/`error`/`message`), drops anything it cannot
+read and never throws, so a changed upstream shape costs provenance detail
+instead of failing the search.
+
+### Per-request SearXNG category
+
+`categories` is Firecrawl's own github/research/pdf/developer/gov filter and has
+nothing to do with SearXNG's categories, so there was no way to ask this
+instance for `finance` or `finance-poland` — the reason the portfolio project
+kept a second SearXNG client of its own. `/v2/search` now accepts
+**`searxngCategory`**, a comma-separated list of the instance's own category
+names, validated by shape rather than against a list because the names are
+instance configuration (`/config` here offers 35, `q&a` and `stock images`
+included). It overrides the category every requested source would otherwise map
+to, and clears the `SEARXNG_ENGINES` pin for the same reason `categoryOf`
+already does for news and images: a web engine pin leaves another category with
+no engine to run.
+
+Two consequences, both deliberate:
+- **No DuckDuckGo fallback for a pinned category.** DDG cannot honour
+  `finance`, so serving its generic web rows would be the same wrong-category
+  substitution the news/images guard already refuses. The attempt is recorded
+  as `skipped`, with the category in `detail`.
+- **SearXNG only.** On a fire-engine deployment the field is inert and the
+  attempt carries a `detail` saying so. The categories a request actually used
+  come back in `provenance.searxngCategories`, so a caller never has to assume.
+
 **Source mapping.** `sources` reaches SearXNG as a category: `news` → `SEARXNG_NEWS_CATEGORIES` (here
-`news`), `images` → `images`, web → `SEARXNG_CATEGORIES` (empty, i.e. the instance default). `tbs` is
+`news`), `images` → `images`, web → `SEARXNG_CATEGORIES` (`general`, see below). A per-request
+`searxngCategory` overrides all three. `tbs` is
 forwarded as SearXNG `time_range` for `qdr:d/w/m/y`; `qdr:h` has no SearXNG bucket and is dropped.
 DuckDuckGo is a **web** fallback only: a news/images-only request that SearXNG cannot fill returns
 empty rather than DDG web rows, which used to appear under the wrong source. The local news + range
 path is currently empty because the only enabled range-capable news engine (`bing news`) returns no
 day/week results here; the portfolio therefore does not send `tbs` on news searches.
+
+**`SEARXNG_CATEGORIES` is `general`.** It was empty, which sent SearXNG no
+`categories` parameter at all and left a `sources: web` search on whatever the
+instance happened to default to — undefined from this side, and owned by a
+*separate* Compose project (`/opt/playground/searxng`) whose settings can change
+without anything here noticing. `general` is what that default resolves to
+today: measured on the live instance with one query three ways, no `categories`
+and `categories=general` returned the same 49 rows from the same engines
+(`mwmbl` 39, `yahoo` 7, `duckduckgo web` 3), so pinning it is
+behaviour-preserving and makes the web route explicit instead of inherited.
+
+`general` is **not** the only general-web category there. The same query with
+`categories=web` returned 72 rows from a disjoint engine set (`google cse`,
+`google cse images`, `naver`, `seznam`, `yahoo`) and 11 unresponsive engines.
+`web` is a genuinely different, broader and flakier route, so it is a per-request
+choice (`searxngCategory: "web"`) rather than the default. `SEARXNG_ENGINES`
+stays empty: an engine pin overrides the category for web searches and would
+leave the other categories unservable. News keeps its own key
+(`SEARXNG_NEWS_CATEGORIES=news`); a caller that wants anything else passes
+`searxngCategory` per request rather than relying on an instance default.
 
 ## Postman integration suite
 
@@ -122,7 +261,7 @@ stamp a generated block into the hub copy and `check` would report drift permane
 - **Two TypeScript versions pinned.** `pnpm build` resolves `typescript` (aliased to `@typescript/typescript6@6.0.2`); the dev `tsc-watch` scripts use `./node_modules/typescript-7/bin/tsc` (TS 7.0.2). Don't install or reference a global `typescript` — both must resolve to the workspace-pinned versions.
 - **Native Rust addon.** `@mendable/firecrawl-rs` builds during `pnpm install` and needs a Rust toolchain. Without it, native scraping features are skipped — and every module importing it fails to typecheck, which is the usual explanation for a burst of `Cannot find module '@mendable/firecrawl-rs'` errors.
 - **Go module.** `sharedLibs/go-html-to-md` is rebuilt by the harness on every run (`go mod tidy` + `go build`); a Go toolchain is required.
-- **`undici` pinned** to `7.30.0` — as a direct dependency in `apps/api/package.json` *and* re-pinned in the `overrides` block of `apps/api/pnpm-workspace.yaml`. Don't upgrade it through normal means.
+- **`undici` pinned** to `7.30.1` — as a direct dependency in `apps/api/package.json` *and* re-pinned in the `overrides` block of `apps/api/pnpm-workspace.yaml`. Don't upgrade it through normal means.
 - **pnpm workspace.** No root `package.json`; each app has its own. Install from the repo root.
 - **FoundationDB backend.** Optional queue backend (`NUQ_BACKEND=fdb`); Postgres is the default and FDB is ignored.
 

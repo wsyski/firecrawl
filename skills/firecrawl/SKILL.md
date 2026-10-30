@@ -81,11 +81,15 @@ curl -s $FC/v2/search -H 'Content-Type: application/json' \
   | jq '.data.web[] | {title, url, description}'
 ```
 
-- `sources`: `web`, `news`, `images` → `.data.web`, `.data.news`, `.data.images`. This is the SearXNG
-  category selector: `news` → `SEARXNG_NEWS_CATEGORIES`, `images` → `images`, web →
-  `SEARXNG_CATEGORIES`. `--categories` is Firecrawl's own github/research/pdf filter, **not** a
-  SearXNG category; `finance`/`finance-poland` cannot be chosen per request. Query SearXNG directly
-  for those.
+- `sources`: `web`, `news`, `images` → `.data.web`, `.data.news`, `.data.images`. This is the default
+  SearXNG category selector: `news` → `SEARXNG_NEWS_CATEGORIES`, `images` → `images`, web →
+  `SEARXNG_CATEGORIES` (`general`). `--categories` is Firecrawl's own github/research/pdf filter,
+  **not** a SearXNG category.
+- `"searxngCategory":"finance"` picks a SearXNG category per request — any name the instance knows
+  (`finance`, `finance-poland`, `science`, `q&a`, comma-separated for several). It overrides the
+  category every requested source maps to, and suppresses the DuckDuckGo fallback, which cannot
+  serve a category. The categories a request actually used come back in
+  `.provenance.searxngCategories`.
 - `tbs`: `qdr:d`, `qdr:w`, `qdr:m`, `qdr:y` map to SearXNG `time_range`; `qdr:h` is dropped. A news-only
   request never falls back to DuckDuckGo web rows. On this instance a ranged news query can be empty
   (no reliable range-capable news engine), so omit `tbs` for the portfolio-style news sweeps.
@@ -93,7 +97,11 @@ curl -s $FC/v2/search -H 'Content-Type: application/json' \
   extra). The free tier returns 429 once its quota is spent.
 - `"scrapeOptions":{"formats":["markdown"]}` adds page markdown to each hit (slower).
 - Results come from SearXNG. An empty result usually means SearXNG engines failed, not that
-  nothing exists. Diagnose with `/searxng`.
+  nothing exists — read `.provenance` to tell the two apart: `.provenance.provider` is whichever
+  provider answered, `.provenance.attempts[]` carries each provider's `outcome`
+  (`results`/`empty`/`error`/`skipped`), SearXNG's own failed engines in `unresponsiveEngines` and
+  ignored engine pins in `unknownEngines`. `jq '.provenance'` first, `/searxng` only if the engines
+  are the problem.
 
 ### Map a site (URL discovery)
 
@@ -131,8 +139,9 @@ HTML and PDF verified.
 
 ## Gotchas
 
-- **`success:true` does not mean the format came back.** An unsupported feature is dropped with
-  only `.data.warning` set. Check the field you asked for.
+- **`success:true` does not mean the format came back.** A format that could not be produced is
+  dropped rather than failing the scrape. `.data.droppedFormats` lists them (absent when nothing was
+  dropped) and `.data.warning` names them in prose — branch on `droppedFormats`.
 - **LLM kill switch:** while `/opt/llm/lock/llm.lock` exists, `json` and `summary` fail. Plain
   scrape, search, map and crawl still work.
 - The first LLM call after llama-swap has unloaded the model is slower.

@@ -469,6 +469,7 @@ async function searchControllerInner(
         highlights: req.body.highlights,
         domainTools: req.body.domainTools,
         toolDetail: req.body.toolDetail,
+        searxngCategory: req.body.searxngCategory,
         inferToolQuery: queryInferenceEnabled(),
         autoTools:
           (sourcesOmitted || req.body.domainTools === true) &&
@@ -639,6 +640,9 @@ async function searchControllerInner(
     return res.status(200).json({
       success: true,
       data: result.response,
+      // Sibling of data, not a result group: an empty data with a failed
+      // provider here is a different answer from an empty data without one.
+      ...(result.provenance ? { provenance: result.provenance } : {}),
       creditsUsed: result.totalCredits,
       id: jobId,
       ...(result.toolsWarning ? { warning: result.toolsWarning } : {}),

@@ -29,6 +29,7 @@ import {
 import { applyHandoffFeatureFlags } from "./lib/handoffFeatureFlags";
 import { parseMarkdown } from "../../lib/html-to-markdown";
 import { hasFormatOfType } from "../../lib/format-utils";
+import { addDroppedFormats } from "../../lib/dropped-formats";
 import {
   ActionError,
   AddFeatureError,
@@ -1694,6 +1695,9 @@ export async function scrapeURL(
           result.document.warning = result.document.warning
             ? `${result.document.warning} ${warning}`
             : warning;
+          // branding was filtered out of meta.options.formats above, so
+          // coerceFieldsToFormats no longer counts it as requested.
+          addDroppedFormats(result.document, "branding");
         }
 
         // Threat protection: if the scrape ended up on a different URL than

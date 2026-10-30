@@ -6,6 +6,7 @@ import {
   verifyTools,
 } from "./tool-intent";
 import { search } from "./v2";
+import type { SearchProvenance } from "./v2/provenance";
 import {
   SearchV2Response,
   SearchResultType,
@@ -69,6 +70,8 @@ interface SearchOptions {
   inferToolQuery?: boolean;
   /** Add compact tools to a search that did not ask for them, when the query needs them. */
   autoTools?: boolean;
+  /** A SearXNG category for this request; only the SearXNG provider reads it. */
+  searxngCategory?: string;
   timeout: number;
 }
 
@@ -99,6 +102,8 @@ interface SearchExecuteResult {
   toolsAuto?: boolean;
   toolsUnavailable?: boolean;
   response: SearchV2Response;
+  /** Which providers were tried and how each answered; lifted out of response. */
+  provenance?: SearchProvenance;
   totalResultsCount: number;
   resultCountsBySource: SearchResultCountsBySource;
   resultCategories: SearchResultCategoriesBySource;
@@ -257,7 +262,12 @@ export async function executeSearch(
             ...(options.excludeDomains ?? []),
             ...operators.excludedSites.filter(site => !site.includes("/")),
           ]),
+          searxngCategory: options.searxngCategory,
         })) as SearchV2Response);
+  // Provenance is about the request, not about a result group: take it off the
+  // payload so counting, scraping, logging and the client's `data` are unchanged.
+  const provenance = searchResponse.provenance;
+  delete searchResponse.provenance;
   const keepOperatorMatches = <
     T extends { url?: string; title?: string; position?: number },
   >(
@@ -611,6 +621,7 @@ export async function executeSearch(
 
   return {
     response: searchResponse,
+    ...(provenance ? { provenance } : {}),
     toolsWarning,
     toolsUnavailable,
     toolsAuto,

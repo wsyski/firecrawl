@@ -168,6 +168,12 @@ export interface SearchV2Response {
   web?: WebSearchResult[];
   images?: ImageSearchResult[];
   news?: NewsSearchResult[];
+  /**
+   * Which providers were tried and how each one answered. Set by the provider
+   * chain (`search/v2`) and lifted out of the group payload by executeSearch,
+   * which returns it to the caller as a sibling of `data`.
+   */
+  provenance?: import("../search/v2/provenance").SearchProvenance;
 }
 
 /**
