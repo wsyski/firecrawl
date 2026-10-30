@@ -3,6 +3,8 @@ import {
   reconcilePageCountWithFirePdf,
   scrapePDFWithFirePDF,
 } from "../firePDF";
+import { buildFirePdfJobOptions } from "../fire-pdf/utils";
+import { config } from "../../../../../config";
 
 vi.mock("../../../lib/fetch", () => ({
   robustFetch: vi.fn(),
@@ -424,5 +426,80 @@ describe("scrapePDFWithFirePDF page markers", () => {
         }),
       }),
     );
+  });
+});
+
+describe("FirePDF table format", () => {
+  const originalTableFormat = config.PARSE_FIRE_PDF_TABLE_FORMAT;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockedRobustFetch.mockResolvedValue({
+      markdown: "Document",
+      failed_pages: null,
+      pages_processed: 1,
+    } as any);
+  });
+
+  afterEach(() => {
+    (config as any).PARSE_FIRE_PDF_TABLE_FORMAT = originalTableFormat;
+  });
+
+  it.each([
+    ["parse", { isParse: true }, "dynamic", "dynamic"],
+    ["parse with html", { isParse: true }, "html", "html"],
+    ["parse with the format off", { isParse: true }, "off", undefined],
+    ["scrape", {}, "dynamic", undefined],
+  ] as const)(
+    "sends the configured format for %s",
+    async (_name, internalOptions, configured, expected) => {
+      (config as any).PARSE_FIRE_PDF_TABLE_FORMAT = configured;
+      const meta = makeMeta();
+      meta.internalOptions = { ...meta.internalOptions, ...internalOptions };
+
+      await scrapePDFWithFirePDF(meta, "BASE64", 1);
+
+      const body = mockedRobustFetch.mock.calls[0][0].body as Record<
+        string,
+        unknown
+      >;
+      expect(body.tableFormat).toBe(expected);
+      expect(Object.hasOwn(body, "tableFormat")).toBe(expected !== undefined);
+    },
+  );
+
+  it("puts the format in async job options only when set", () => {
+    const trainingCapture = {
+      eligible: true,
+      policy_ref: "firecrawl-org-training-v1",
+      decision_ref: "eligible",
+    } as const;
+    const base = {
+      maxPages: undefined,
+      pagesProcessed: 2,
+      mode: "auto" as const,
+      includePageMarkdown: false,
+      includeBlocks: false,
+      pageMarkers: false,
+      trainingCapture,
+    };
+    expect(buildFirePdfJobOptions({ ...base, tableFormat: "dynamic" })).toEqual(
+      {
+        pages_estimate: 2,
+        mode: "auto",
+        tableFormat: "dynamic",
+        training_capture: trainingCapture,
+      },
+    );
+    expect(buildFirePdfJobOptions({ ...base, tableFormat: undefined })).toEqual(
+      { pages_estimate: 2, mode: "auto", training_capture: trainingCapture },
+    );
+    expect(
+      buildFirePdfJobOptions({
+        ...base,
+        tableFormat: undefined,
+        trainingCapture: undefined,
+      }),
+    ).toEqual({ pages_estimate: 2, mode: "auto" });
   });
 });

@@ -100,6 +100,15 @@ vi.mock("../client", () => ({
   },
 }));
 
+// An unanswered firebill track is handed to a Redis-backed retry queue; no
+// Redis here, so the hand-off is accepted and dropped.
+const { retryQueueAdd } = vi.hoisted(() => ({
+  retryQueueAdd: vi.fn(async (_name: string, _data: unknown) => undefined),
+}));
+vi.mock("../../queue-service", () => ({
+  getFirebillTrackRetryQueue: () => ({ add: retryQueueAdd }),
+}));
+
 vi.mock("../../../db/connection", () => ({
   get dbRr() {
     return makeDbStub(state.gatewayStubRow, state.gatewayStubThrows);
@@ -823,6 +832,52 @@ describe("featureIdForBillingEndpoint", () => {
 // getTeamLimits (concurrency + rate-limit multiplier)
 // ---------------------------------------------------------------------------
 
+describe("hasAutoTopUp", () => {
+  const customer = (enabled: boolean, billingMethod?: string) => ({
+    billingControls: {
+      autoTopups: [
+        { featureId: "CREDITS", enabled, threshold: 0, quantity: 1000 },
+      ],
+    },
+    balances: {
+      CREDITS: {
+        breakdown: [
+          { planId: "standard", price: null },
+          ...(billingMethod
+            ? [{ planId: "standard", price: { billingMethod } }]
+            : []),
+        ],
+      },
+    },
+  });
+
+  it("is true for an enabled top-up with a prepaid CREDITS item to buy", async () => {
+    mockCustomerGet.mockResolvedValue(customer(true, "prepaid"));
+    expect(await makeService().hasAutoTopUp("org-1")).toBe(true);
+    expect(mockCustomerGet).toHaveBeenCalledWith({ customerId: "org-1" });
+  });
+
+  it("is false when the top-up is disabled", async () => {
+    mockCustomerGet.mockResolvedValue(customer(false, "prepaid"));
+    expect(await makeService().hasAutoTopUp("org-1")).toBe(false);
+  });
+
+  it("is false for an enabled top-up with nothing prepaid to buy (free plan)", async () => {
+    mockCustomerGet.mockResolvedValue(customer(true));
+    expect(await makeService().hasAutoTopUp("org-1")).toBe(false);
+  });
+
+  it("fails open (true) when Autumn errors", async () => {
+    mockCustomerGet.mockRejectedValue(new Error("autumn down"));
+    expect(await makeService().hasAutoTopUp("org-1")).toBe(true);
+  });
+
+  it("fails open (true) without an Autumn client", async () => {
+    state.autumnClientRef = null;
+    expect(await makeService().hasAutoTopUp("org-1")).toBe(true);
+  });
+});
+
 describe("getTeamLimits", () => {
   const lowDefaults = {
     concurrency_limit: 2,
@@ -1123,6 +1178,33 @@ describe("firebill routing", () => {
       idempotency_key: expect.any(String),
     });
   });
+
+  it.each([
+    ["trackCredits", 4, "track"],
+    ["refundCredits", 4, "refund"],
+  ] as const)(
+    "%s carries durableRetry through to firebill's retry hand-off",
+    async (method, value, name) => {
+      state.configRef = firebillConfig();
+      mockFetch.mockRejectedValue(new Error("timeout"));
+      const svc = makeService();
+      const call = (durableRetry?: boolean) =>
+        svc[method]({
+          teamId: "team-1",
+          orgId: "org-1",
+          value,
+          idempotencyKey: `fc:${name}:test:1`,
+          ...(durableRetry === undefined ? {} : { durableRetry }),
+        });
+
+      await expect(call(false)).resolves.toBe(false);
+      expect(retryQueueAdd).not.toHaveBeenCalled();
+
+      await expect(call()).resolves.toBe(false);
+      expect(retryQueueAdd).toHaveBeenCalledTimes(1);
+      expect(retryQueueAdd.mock.calls[0]![0]).toBe(name);
+    },
+  );
 
   // The gate, not the charge. Before this branch existed checkCredits asked
   // Autumn about the ghost's balance alone — and a gateway ghost is designed to

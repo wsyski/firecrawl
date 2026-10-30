@@ -1,5 +1,6 @@
 import { NextFunction, Request, Response } from "express";
 import { config } from "../../config";
+import { timingSafeSecretEqual } from "../../lib/secret-compare";
 import { logger as _logger } from "../../lib/logger";
 import {
   Document,
@@ -371,9 +372,14 @@ export async function parseController(
         (req.body.zeroDataRetention ?? false);
       const billing: BillingMetadata = {
         ...(req.body.__agentInterop
-          ? { endpoint: "agent" as const, jobId }
+          ? {
+              endpoint: "agent" as const,
+              jobId,
+              agentRequestId: req.body.__agentInterop.requestId,
+            }
           : { endpoint: "parse" as const, jobId }),
         externalRequestId: externalRequestId(req),
+        hostedMcp: req.auth.hostedMcp,
       };
 
       if (
@@ -396,9 +402,10 @@ export async function parseController(
       const agentRequestId = req.body.__agentInterop?.requestId ?? null;
       const boostConcurrency =
         req.body.__agentInterop?.boostConcurrency ?? false;
-      const isDirectToBullMQ =
-        config.SEARCH_PREVIEW_TOKEN !== undefined &&
-        config.SEARCH_PREVIEW_TOKEN === req.body.__searchPreviewToken;
+      const isDirectToBullMQ = timingSafeSecretEqual(
+        req.body.__searchPreviewToken,
+        config.SEARCH_PREVIEW_TOKEN,
+      );
       const projectedKeylessCredits =
         shouldBill && !isDirectToBullMQ
           ? projectScrapeCredits(

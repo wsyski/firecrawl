@@ -7,6 +7,7 @@ import { Meta } from "../../scraper/scrapeURL";
 import { Document } from "../../controllers/v2/types";
 import { BrandingScriptReturn, ButtonSnapshot } from "./types";
 import { mergeBrandingResults } from "./merge";
+import { isPageControl } from "./page-controls";
 import {
   selectLogoWithConfidence,
   getTopCandidatesForLLM,
@@ -24,6 +25,32 @@ function isDebugBrandingEnabled(meta: Meta): boolean {
     config.DEBUG_BRANDING === true ||
     meta.internalOptions.teamFlags?.debugBranding === true
   );
+}
+
+/**
+ * The best-ranked button of each look first, then the rest, up to `max`, in
+ * ranking order: a page with many buttons in one style still shows the model
+ * its other styles, such as a secondary action.
+ */
+export function pickDistinctStylesFirst<T extends { btn: ButtonSnapshot }>(
+  ranked: T[],
+  max: number,
+): T[] {
+  const style = ({ btn }: T) =>
+    `${btn.background}|${btn.textColor}|${btn.borderColor ?? ""}`.toUpperCase();
+  const seen = new Set<string>();
+  const firsts: T[] = [];
+  const rest: T[] = [];
+  for (const item of ranked) {
+    if (seen.has(style(item))) {
+      rest.push(item);
+    } else {
+      seen.add(style(item));
+      firsts.push(item);
+    }
+  }
+  const picked = new Set([...firsts, ...rest].slice(0, max));
+  return ranked.filter(item => picked.has(item));
 }
 
 export async function brandingTransformer(
@@ -46,10 +73,9 @@ export async function brandingTransformer(
   const logoCandidates = [...(rawBranding.logoCandidates || [])];
   const brandName = rawBranding.brandName?.trim() || undefined;
   const declared = pickDeclaredLogo(rawBranding.images);
-  if (
-    declared &&
-    shouldAddDeclaredLogoCandidate(logoCandidates, declared.src)
-  ) {
+  const declaredEligible =
+    !!declared && shouldAddDeclaredLogoCandidate(logoCandidates, declared);
+  if (declared && declaredEligible) {
     logoCandidates.push(
       declaredLogoCandidate(declared.src, declared.source, brandName),
     );
@@ -117,12 +143,16 @@ export async function brandingTransformer(
 
     // Limit buttons to top 12 most relevant ones to reduce prompt size
     // Prioritize buttons with CTA indicators, vibrant colors, or common CTA text
-    let limitedButtons = buttonSnapshots;
-    const buttonIndexMap = new Map<number, number>(); // LLM index -> original index
+    // Skip links and map controls aren't calls to action: leave them out
+    // before choosing, so they take no place among the buttons sent.
+    const candidates = buttonSnapshots
+      .map((btn, idx) => ({ btn, originalIdx: idx }))
+      .filter(({ btn }) => !isPageControl(btn));
+    let chosen = candidates;
 
-    if (buttonSnapshots.length > 12) {
-      const scored = buttonSnapshots
-        .map((btn, idx) => {
+    if (candidates.length > 12) {
+      const ranked = candidates
+        .map(({ btn, originalIdx }) => {
           let score = 0;
           const text = (btn.text || "").toLowerCase();
           const bgColor = btn.background || "";
@@ -161,23 +191,17 @@ export async function brandingTransformer(
           // On the first screen of the page
           if (typeof btn.top === "number" && btn.top < 1000) score += 40;
 
-          return { btn, originalIdx: idx, score };
+          return { btn, originalIdx, score };
         })
-        .sort((a, b) => b.score - a.score)
-        .slice(0, 12);
-
-      limitedButtons = scored.map(item => item.btn);
-
-      // Create index map: LLM index (0-11) -> original index
-      scored.forEach((item, llmIdx) => {
-        buttonIndexMap.set(llmIdx, item.originalIdx);
-      });
-    } else {
-      // No filtering needed, create identity map
-      buttonSnapshots.forEach((_, idx) => {
-        buttonIndexMap.set(idx, idx);
-      });
+        .sort((a, b) => b.score - a.score);
+      chosen = pickDistinctStylesFirst(ranked, 12);
     }
+
+    const limitedButtons = chosen.map(item => item.btn);
+    const buttonIndexMap = new Map<number, number>(); // LLM index -> original index
+    chosen.forEach((item, llmIdx) => {
+      buttonIndexMap.set(llmIdx, item.originalIdx);
+    });
 
     meta.logger.info("Button filtering for LLM", {
       totalButtons: buttonSnapshots.length,
@@ -206,6 +230,8 @@ export async function brandingTransformer(
       backgroundCandidates:
         backgroundCandidates.length > 0 ? backgroundCandidates : undefined,
       screenshot: document.screenshot,
+      firstScreen: meta.brandingScreenshot,
+      firstScreenImage: meta.brandingScreenshotImage,
       url: finalUrl || "",
       headerHtmlChunk: headerHtmlChunk || undefined,
       favicon: brandingProfile.images?.favicon ?? undefined,
@@ -215,7 +241,6 @@ export async function brandingTransformer(
       scrapeId: meta.id,
       zeroDataRetention: meta.internalOptions.zeroDataRetention,
       teamFlags: meta.internalOptions.teamFlags,
-      mode: hasFormatOfType(meta.options.formats, "branding")?.mode,
       costTracking: meta.costTracking,
       logger: meta.logger,
     });
@@ -449,8 +474,10 @@ export async function brandingTransformer(
 
   // Last-resort fallback: when the candidate → heuristic → LLM pipeline ended
   // with no logo (no candidates, LLM rejection, or LLM failure), use the
-  // site-declared brand mark. Never overrides a selected logo.
-  if (!brandingProfile.images?.logo && declared) {
+  // site-declared brand mark, under the same gate as above: an app icon
+  // doesn't stand in for a rendered logo the model turned down. Never
+  // overrides a selected logo.
+  if (!brandingProfile.images?.logo && declared && declaredEligible) {
     brandingProfile.images = {
       ...(brandingProfile.images ?? {}),
       logo: declared.src,

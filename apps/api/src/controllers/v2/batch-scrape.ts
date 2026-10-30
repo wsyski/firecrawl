@@ -147,9 +147,14 @@ export async function batchScrapeController(
   const id = req.body.appendToId ?? uuidv7();
   const billing: BillingMetadata = {
     ...(req.body.__agentInterop
-      ? { endpoint: "agent" as const, jobId: id }
+      ? {
+          endpoint: "agent" as const,
+          jobId: id,
+          agentRequestId: req.body.__agentInterop.requestId,
+        }
       : { endpoint: "batch_scrape" as const, jobId: id }),
     externalRequestId: externalRequestId(req),
+    hostedMcp: req.auth.hostedMcp,
   };
   const logger = _logger.child({
     crawlId: id,
@@ -300,7 +305,7 @@ export async function batchScrapeController(
         threatScanCredits > 0 &&
         (req.body.__agentInterop?.shouldBill ?? true)
       ) {
-        billTeam(
+        const charge = billTeam(
           req.auth.team_id,
           req.acuc?.org_id ?? null,
           threatScanCredits,
@@ -317,6 +322,8 @@ export async function batchScrapeController(
             `Failed to bill team ${req.auth.team_id} for ${threatScanCredits} threat scan credit(s): ${error}`,
           );
         });
+        // See search: a hosted MCP agent run's MCP credits part lands first.
+        if (billing.hostedMcp && billing.agentRequestId) await charge;
       }
       emitRejectedScrapeActivityEvents(
         blocked.map(blockedUrl => ({
@@ -442,7 +449,7 @@ export async function batchScrapeController(
           threatProtection: threatProtection.policy ?? undefined,
           // Safe Mode rides the batch payload so each URL resolves it per-URL
           // at the scrapeURL backstop.
-          teamFlags: req.acuc?.flags ?? undefined,
+          teamFlags: req.acuc?.flags ?? null,
           safeModeBypassed: safeMode.bypassed === true,
         }, // NOTE: smart wait disabled for batch scrapes to ensure contentful scrape, speed does not matter
         team_id: req.auth.team_id,

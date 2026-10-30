@@ -2,6 +2,7 @@ import { Response } from "express";
 import { providerScrapeController } from "./scrape-alexandria";
 import { discoverTools } from "../../search/alexandria";
 import { config } from "../../config";
+import { timingSafeSecretEqual } from "../../lib/secret-compare";
 import { logger as _logger } from "../../lib/logger";
 import {
   Document,
@@ -221,9 +222,14 @@ export async function scrapeController(
         });
       const billing: BillingMetadata = {
         ...(req.body.__agentInterop
-          ? { endpoint: "agent" as const, jobId }
+          ? {
+              endpoint: "agent" as const,
+              jobId,
+              agentRequestId: req.body.__agentInterop.requestId,
+            }
           : { endpoint: "scrape" as const, jobId }),
         externalRequestId: externalRequestId(req),
+        hostedMcp: req.auth.hostedMcp,
       };
 
       if (
@@ -246,9 +252,10 @@ export async function scrapeController(
       const agentRequestId = req.body.__agentInterop?.requestId ?? null;
       const boostConcurrency =
         req.body.__agentInterop?.boostConcurrency ?? false;
-      const isDirectToBullMQ =
-        config.SEARCH_PREVIEW_TOKEN !== undefined &&
-        config.SEARCH_PREVIEW_TOKEN === req.body.__searchPreviewToken;
+      const isDirectToBullMQ = timingSafeSecretEqual(
+        req.body.__searchPreviewToken,
+        config.SEARCH_PREVIEW_TOKEN,
+      );
       const projectedKeylessCredits =
         shouldBill && !isDirectToBullMQ
           ? projectScrapeCredits(
@@ -756,6 +763,7 @@ export async function scrapeController(
           ? await discoverTools(
               {
                 teamId: req.auth.team_id,
+                connectors: req.acuc?.flags?.exchangeRetrieve === true,
                 toolDetail: req.body.toolDetail,
                 urls: [
                   ...new Set(

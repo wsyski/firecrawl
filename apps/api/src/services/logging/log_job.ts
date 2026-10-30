@@ -16,6 +16,10 @@ import {
 import { hasFormatOfType } from "../../lib/format-utils";
 import { keylessTeamUuid } from "../../lib/keyless";
 import type { Document, ScrapeOptions } from "../../controllers/v2/types";
+import type {
+  SearchResultCountsBySource,
+  SearchResultCategoriesBySource,
+} from "../../lib/entities";
 import type { CostTracking } from "../../lib/cost-tracking";
 import type { Logger } from "winston";
 import { saveExtractResult } from "../../lib/extract/extract-redis";
@@ -436,6 +440,8 @@ type LoggedRequest = {
   external_request_id?: string | null;
   jobAccess?: boolean;
   jobAccessExpiresAt?: Date;
+  /** An agent run's ZDR retention, recorded on its job access row. */
+  jobAccessZeroDataRetentionMinutes?: number;
   creditsShards?: number;
 };
 
@@ -524,6 +530,7 @@ async function logRequestInternal(request: LoggedRequest) {
           new Date(Date.now() + DEFAULT_JOB_ACCESS_TTL_MS),
         clientOrigin: sanitizedOrigin,
         zeroDataRetention: request.zeroDataRetention,
+        zeroDataRetentionMinutes: request.jobAccessZeroDataRetentionMinutes,
       });
     } catch (error) {
       logger.error("Failed to write API job access to Bigtable", {
@@ -810,6 +817,7 @@ type LoggedProviderScrape = {
   credits_cost: number;
   is_successful: boolean;
   error?: string;
+  zeroDataRetention: boolean;
 };
 
 export async function logProviderScrape(scrape: LoggedProviderScrape) {
@@ -819,7 +827,7 @@ export async function logProviderScrape(scrape: LoggedProviderScrape) {
       table: "scrapes",
       id: scrape.id,
       requestId: scrape.request_id,
-      zeroDataRetention: false,
+      zeroDataRetention: scrape.zeroDataRetention,
     },
     () => logProviderScrapeInternal(scrape),
   );
@@ -844,12 +852,18 @@ async function logProviderScrapeInternal(scrape: LoggedProviderScrape) {
     {
       id: scrape.id,
       request_id: scrape.request_id,
-      url: scrape.target,
+      url: scrape.zeroDataRetention
+        ? "<redacted due to zero data retention>"
+        : scrape.target,
       is_successful: scrape.is_successful,
-      error: scrape.error ?? null,
+      error: scrape.zeroDataRetention
+        ? scrape.error === undefined
+          ? null
+          : "<redacted due to zero data retention>"
+        : (scrape.error ?? null),
       time_taken: scrape.time_taken,
       team_id: storedTeamId,
-      options: scrape.options,
+      options: scrape.zeroDataRetention ? null : scrape.options,
       cost_tracking: null,
       pdf_num_pages: null,
       credits_cost: scrape.credits_cost,
@@ -983,6 +997,8 @@ export type LoggedSearch = {
   is_successful: boolean;
   error?: string;
   num_results: number;
+  num_results_by_source?: SearchResultCountsBySource;
+  result_categories?: SearchResultCategoriesBySource;
   results: any;
   zeroDataRetention: boolean;
 };
@@ -1028,6 +1044,18 @@ async function logSearchInternal(search: LoggedSearch) {
       succeeded: search.is_successful,
       creditsBilled: search.credits_cost,
       zeroDataRetention: search.zeroDataRetention,
+      // Position feedback bounds each `{source, position}` against the group
+      // it addresses, and attributes it to the vertical that served it. This
+      // is the record feedback reads, and the one the feedback window is
+      // enforced from, so the counts travel with it. `writeFeedbackJob`
+      // redacts both under zero data retention.
+      //
+      // Only v2 search reports counts. A v0/v1 search returns a flat list
+      // whose positions do not map to `{source, position}`, so it records `{}`
+      // and every position is rejected. Leaving it absent would read as a job
+      // that predates the field and accept any position unbounded.
+      numResultsBySource: search.num_results_by_source ?? {},
+      resultCategories: search.result_categories,
     },
     logger,
   );
@@ -1048,6 +1076,18 @@ async function logSearchInternal(search: LoggedSearch) {
       is_successful: search.is_successful,
       error: search.zeroDataRetention ? null : (search.error ?? null),
       num_results: search.num_results,
+      // Both are response-derived and both are redacted under zero data
+      // retention: the per-source split says how the result set was composed
+      // ({"web":3,"news":10} characterises the query's coverage in a way the
+      // combined total does not), and the category map says which vertical
+      // served each position. Feedback on a ZDR search is not persisted
+      // anyway, so neither column has a reader for those rows.
+      num_results_by_source: search.zeroDataRetention
+        ? null
+        : (search.num_results_by_source ?? null),
+      result_categories: search.zeroDataRetention
+        ? null
+        : (search.result_categories ?? null),
       time_taken: search.time_taken,
     },
     logger,
@@ -1411,4 +1451,37 @@ async function logDeepResearchInternal(deepResearch: LoggedDeepResearch) {
   if (deepResearch.result) {
     await saveDeepResearchToGCS(deepResearch, logger);
   }
+}
+
+type LoggedMcpActionLog = {
+  id: string;
+  team_id: string;
+  request_id: string;
+  [field: string]: unknown;
+};
+
+/**
+ * One hosted MCP tool call from the internal action-log ingest. `id` is the
+ * MCP request id, so retried deliveries collapse into one row.
+ */
+export async function logMcpActionLog(action: LoggedMcpActionLog) {
+  return withLogSpan(
+    {
+      operation: "mcp_action",
+      table: "mcp_action_logs",
+      id: action.id,
+      requestId: action.request_id,
+    },
+    () => logMcpActionLogInternal(action),
+  );
+}
+
+async function logMcpActionLogInternal(action: LoggedMcpActionLog) {
+  const logger = _logger.child({
+    module: "log_job",
+    method: "logMcpActionLog",
+    requestId: action.request_id,
+    teamId: action.team_id,
+  });
+  await robustInsert("mcp_action_logs", action, logger);
 }

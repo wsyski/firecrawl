@@ -1,5 +1,6 @@
 import type { Meta } from "../../..";
 import type { PDFMode } from "../../../../../controllers/v2/types";
+import type { FirePdfTrainingCapture } from "./request-metadata";
 import { config } from "../../../../../config";
 import {
   INLINE_JOB_DEADLINE_MARGIN_FRACTION,
@@ -158,6 +159,8 @@ export function buildFirePdfJobOptions(args: {
   includePageMarkdown: boolean;
   includeBlocks: boolean;
   pageMarkers: boolean;
+  tableFormat: string | undefined;
+  trainingCapture: FirePdfTrainingCapture | undefined;
 }): Record<string, unknown> {
   return {
     // fire-pdf accepts only a positive integer here. When the router has no
@@ -179,6 +182,8 @@ export function buildFirePdfJobOptions(args: {
     // `page_markers`. Sending snake_case here would be rejected as an
     // unknown option.
     ...(args.pageMarkers && { pageMarkers: true }),
+    ...(args.tableFormat !== undefined && { tableFormat: args.tableFormat }),
+    ...(args.trainingCapture && { training_capture: args.trainingCapture }),
   };
 }
 

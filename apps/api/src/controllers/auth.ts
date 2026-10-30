@@ -2,12 +2,15 @@ import { RateLimiterRedis } from "rate-limiter-flexible";
 import { isValidUuid } from "../lib/owner-id";
 import { config } from "../config";
 import { logger } from "../lib/logger";
+import { timingSafeSecretEqual } from "../lib/secret-compare";
 import { parseApi } from "../lib/parseApi";
 import { withAuth } from "../lib/withAuth";
 import { getAgentSponsorStatus } from "../services/agent-sponsor";
 import {
   getRateLimiter,
   getAutumnRateLimiter,
+  getHostedMcpConcurrencyLimit,
+  getHostedMcpRateLimiter,
   getRateLimitOverride,
   HOBBY_RATE_LIMIT_MULTIPLIER,
 } from "../services/rate-limiter";
@@ -20,11 +23,13 @@ import {
   keylessLimitPrompt,
   keylessSignupUrlForIp,
   keylessTeamId,
+  keylessWorldIdIdentity,
   normalizeKeylessIpv4,
   reportKeylessPromptShown,
 } from "../lib/keyless";
 import { keylessSignupSurface } from "../lib/keyless-signup-link";
 import { isKeylessIpSuspicious } from "../lib/spur";
+import { verifyWorldIdCredential } from "../lib/world-id";
 import { keylessAuthTotal } from "../lib/keyless-metrics";
 import { checkIpRestriction } from "../lib/ip-restriction";
 import { checkKeyEndpointRestriction } from "../lib/key-restriction";
@@ -52,6 +57,7 @@ import {
   type TeamLimits,
 } from "../services/autumn/autumn.service";
 import { ReplyError } from "ioredis";
+import { resolveIntegration } from "../utils/integration";
 
 const ACUC_TTL_SECONDS = 600;
 // A chunk built on the fail-open limits is cached only briefly, so a
@@ -215,7 +221,7 @@ async function getACUC(
     mode === RateLimiterMode.ExtractStatus ||
     mode === RateLimiterMode.ExtractAgentPreview;
 
-  if (api_key === config.PREVIEW_TOKEN) {
+  if (timingSafeSecretEqual(api_key, config.PREVIEW_TOKEN)) {
     const acuc = mockPreviewACUC(api_key, isExtract);
     acuc.is_extract = isExtract;
     return acuc;
@@ -552,7 +558,7 @@ Authorization: Bearer YOUR_API_KEY`;
 }
 
 function keylessSuspiciousIpMessage(signupUrl: string): string {
-  return `Unfortunately, your IP address looks suspicious, so Firecrawl can't be used without an API key from here. Sign up for a free API key at ${signupUrl} for 1000 credits and higher rate limits for free. (If you're an agent, you can also use https://firecrawl.dev/auth.md)`;
+  return `Unfortunately, your IP address looks like a VPN or proxy, so Firecrawl can't be used without an API key from here. Sign up with Google or GitHub at ${signupUrl} for a free API key with 1000 credits and higher rate limits. (If you're an agent, you can also use https://firecrawl.dev/auth.md)`;
 }
 
 /**
@@ -561,11 +567,13 @@ function keylessSuspiciousIpMessage(signupUrl: string): string {
  * shared secret — without the secret the header is ignored, so direct callers
  * can't spoof their IP to dodge the per-IP cap.
  */
-function keylessClientIp(req): string {
+export function keylessClientIp(req): string {
   let ip = req.ip ?? req.socket?.remoteAddress ?? "unknown";
   if (
-    config.KEYLESS_PROXY_SECRET &&
-    req.headers["x-firecrawl-keyless-secret"] === config.KEYLESS_PROXY_SECRET
+    timingSafeSecretEqual(
+      req.headers["x-firecrawl-keyless-secret"],
+      config.KEYLESS_PROXY_SECRET,
+    )
   ) {
     const forwarded = req.headers["x-firecrawl-keyless-ip"];
     if (typeof forwarded === "string" && forwarded.trim()) {
@@ -626,7 +634,7 @@ async function handleKeylessAuth(
   }
 
   const origin = req.body?.origin;
-  const integration = req.body?.integration;
+  const integration = resolveIntegration(req.body?.integration, req);
   // No origin/surface gate: any request without an API key may use the free
   // tier on the allowlisted endpoints (the API itself is free). origin and
   // integration are still recorded below for abuse monitoring, and pick the
@@ -635,10 +643,20 @@ async function handleKeylessAuth(
 
   let ip = keylessClientIp(req);
 
+  // A World ID verified human (a valid `fcwid_` credential) gets their own
+  // bucket keyed on their World ID instead of the IP, so the IP checks below
+  // don't apply. A missing or invalid credential falls back to the IP bucket.
+  const worldIdSubject = verifyWorldIdCredential(
+    req.headers["x-firecrawl-world-id"],
+  );
+  const worldIdIdentity = worldIdSubject
+    ? keylessWorldIdIdentity(worldIdSubject)
+    : null;
+
   // Only a valid IPv4 identity gets keyless: IPv6 is too cheap to rotate for a
   // per-IP cap to mean anything, and malformed/forwarded values must not be
   // usable as arbitrary limiter buckets. Anything else falls through to 401.
-  if (!isKeylessIpEligible(ip)) {
+  if (!worldIdIdentity && !isKeylessIpEligible(ip)) {
     return denied(req, "keyless_ip_ineligible", unauthorized);
   }
 
@@ -650,7 +668,7 @@ async function handleKeylessAuth(
   // for IPs fronting anonymizing/rotating infrastructure (VPN/proxy/TOR), the
   // main way the per-IP caps get bypassed. Fails open on any Spur error, and
   // runs before consuming quota so a flagged IP doesn't burn a request slot.
-  if (await isKeylessIpSuspicious(ip)) {
+  if (!worldIdIdentity && (await isKeylessIpSuspicious(ip))) {
     keylessAuthTotal.inc({ mode, outcome: "suspicious" });
     const { url, signupRef } = keylessSignupUrlForIp(
       ip,
@@ -668,7 +686,7 @@ async function handleKeylessAuth(
       canonicalLog: "keyless/consume",
       ip,
       origin: req.body?.origin,
-      integration: req.body?.integration,
+      integration,
       blocked: true,
       reason: "suspicious",
       ...(signupRef ? { signupRef } : {}),
@@ -683,7 +701,9 @@ async function handleKeylessAuth(
     });
   }
 
-  const teamId = keylessTeamId(ip);
+  // The quota bucket and team id. Logs keep the client IP either way.
+  const identity = worldIdIdentity ?? ip;
+  const teamId = keylessTeamId(identity);
   const modeLabel =
     mode === RateLimiterMode.Search
       ? "search"
@@ -699,7 +719,7 @@ async function handleKeylessAuth(
 
   let result: Awaited<ReturnType<typeof consumeKeylessRequest>>;
   try {
-    result = await consumeKeylessRequest(ip);
+    result = await consumeKeylessRequest(identity);
   } catch (error) {
     keylessAuthTotal.inc({ mode, outcome: "error" });
     // Limiter store (Redis) unavailable — fail closed with a controlled auth
@@ -721,13 +741,17 @@ async function handleKeylessAuth(
     integration,
     mode: modeLabel,
     teamId,
+    worldId: worldIdIdentity !== null,
     requestsUsed: result.requestsUsed,
     creditsUsed: result.creditsUsed,
   };
 
   if (!result.ok) {
     keylessAuthTotal.inc({ mode, outcome: result.reason ?? "error" });
-    const prompt = keylessLimitPrompt(ip, signupSurface);
+    const prompt = keylessLimitPrompt(
+      worldIdIdentity ? null : ip,
+      signupSurface,
+    );
     logger.warn("Keyless request blocked", {
       ...baseLog,
       blocked: true,
@@ -735,7 +759,7 @@ async function handleKeylessAuth(
       reason: result.reason,
       retryAfterSeconds: result.retryAfterSeconds,
       ...(prompt.signupRef ? { signupRef: prompt.signupRef } : {}),
-      ...keylessExhaustionTelemetry(ip),
+      ...keylessExhaustionTelemetry(identity),
     });
     return {
       success: false,
@@ -793,27 +817,39 @@ export async function authenticateUser(
  * on to getAutumnRateLimiter, which stays the only place deciding the final
  * limit. An override makes the multiplier irrelevant, so we skip fetching it
  * from Autumn in that case rather than paying for a value that is discarded.
- *
- * `minMultiplier` floors the Autumn multiplier (trusted agent traffic passes
- * the hobby multiplier). It never applies on top of an override, which already
- * replaces the whole computation.
  */
 async function buildAuthenticatedRateLimiter(
   chunk: AuthCreditUsageChunk,
   mode: RateLimiterMode,
   minMultiplier?: number,
 ): Promise<RateLimiterRedis> {
-  const flags = chunk.flags;
-  let multiplier: number;
-  if (getRateLimitOverride(mode, flags?.rateLimitOverrides) !== undefined) {
-    multiplier = 1;
-  } else {
-    multiplier = chunk.rate_limit_multiplier;
-    if (minMultiplier !== undefined) {
-      multiplier = Math.max(multiplier, minMultiplier);
-    }
+  return getAutumnRateLimiter(
+    mode,
+    authenticatedRateLimitMultiplier(chunk, mode, minMultiplier),
+    chunk.flags,
+  );
+}
+
+/**
+ * The multiplier an authenticated team's limiter uses for a mode: a neutral 1
+ * under an override, otherwise the Autumn multiplier floored at
+ * `minMultiplier` (trusted agent traffic passes the hobby multiplier). The
+ * floor never applies on top of an override, which already replaces the whole
+ * computation.
+ */
+function authenticatedRateLimitMultiplier(
+  chunk: AuthCreditUsageChunk,
+  mode: RateLimiterMode,
+  minMultiplier?: number,
+): number {
+  if (
+    getRateLimitOverride(mode, chunk.flags?.rateLimitOverrides) !== undefined
+  ) {
+    return 1;
   }
-  return getAutumnRateLimiter(mode, multiplier, flags);
+  return minMultiplier !== undefined
+    ? Math.max(chunk.rate_limit_multiplier, minMultiplier)
+    : chunk.rate_limit_multiplier;
 }
 
 type AuthenticateOptions = {
@@ -821,6 +857,10 @@ type AuthenticateOptions = {
   // Route opt-in: a trusted agent-interop request may authenticate with a
   // hosted_mcp_oauth key, which agent runs started from the hosted MCP carry.
   allowAgentManagedKey?: boolean;
+  // Route opt-in: calls the hosted MCP makes get the raised per-minute and
+  // concurrency minimums (see getHostedMcpRateLimiter and
+  // getHostedMcpConcurrencyLimit) only on routes that set this.
+  hostedMcpRateLimit?: boolean;
 };
 
 async function supaAuthenticateUser(
@@ -866,12 +906,15 @@ async function supaAuthenticateUser(
 
   let teamId: string | null = null;
   let chunk: AuthCreditUsageChunk | null = null;
+  // Set only once a hosted MCP delegated credential has verified, so the
+  // client never decides it.
+  let hostedMcpDelegation = false;
   if (token == "this_is_just_a_preview_token") {
     throw new Error(
       "Unauthenticated Playground calls are temporarily disabled due to abuse. Please sign up.",
     );
   }
-  if (token == config.PREVIEW_TOKEN) {
+  if (timingSafeSecretEqual(token, config.PREVIEW_TOKEN)) {
     if (mode == RateLimiterMode.CrawlStatus) {
       rateLimiter = getRateLimiter(RateLimiterMode.CrawlStatus);
     } else if (mode == RateLimiterMode.ExtractStatus) {
@@ -911,6 +954,7 @@ async function supaAuthenticateUser(
 
     teamId = chunk.team_id;
     subscriptionData = { team_id: teamId };
+    hostedMcpDelegation = true;
     rateLimiter = await buildAuthenticatedRateLimiter(
       chunk,
       mode,
@@ -938,10 +982,11 @@ async function supaAuthenticateUser(
         status: 401,
       });
     }
-    if (
-      introspection.credential_purpose !== undefined &&
-      introspection.credential_purpose !== "general"
-    ) {
+    const credentialPurpose = introspection.credential_purpose ?? "general";
+    const isRestGrantKey =
+      credentialPurpose === "hosted_mcp_oauth" &&
+      introspection.aud === FIRECRAWL_REST_RESOURCE;
+    if (credentialPurpose !== "general" && !isRestGrantKey) {
       return denied(req, "oauth_purpose_mismatch", {
         success: false,
         error: "Unauthorized: Invalid token",
@@ -949,14 +994,13 @@ async function supaAuthenticateUser(
       });
     }
 
-    // Use the resolved fc- API key to get the normal ACUC chunk
     const resolvedApi = parseApi(introspection.api_key);
     chunk = await getACUC(
       resolvedApi,
       false,
       true,
       RateLimiterMode.Scrape,
-      "general",
+      credentialPurpose,
     );
 
     if (chunk === null) {
@@ -1095,7 +1139,50 @@ async function supaAuthenticateUser(
     }
   }
 
-  const team_endpoint_token = token === config.PREVIEW_TOKEN ? iptoken : teamId;
+  let hostedMcpCall = false;
+  if (chunk !== null) {
+    // Calls the hosted MCP makes on routes that opt in (every v2 route) get a
+    // raised per-minute minimum, and scrape calls a raised concurrency
+    // minimum. Two signals prove the hosted MCP made the call: a verified
+    // delegated credential (managed OAuth sessions) or the proxy secret it
+    // shares with the API (sessions that send a plain API key).
+    // `fco_` tokens never qualify: the hosted MCP keeps those for the issuer,
+    // so a REST call carrying one comes from the client itself. Origin and
+    // integration are client-set, so they never change the limit.
+    hostedMcpCall =
+      hostedMcpDelegation ||
+      (!token.startsWith("fco_") &&
+        timingSafeSecretEqual(
+          req.headers["x-firecrawl-keyless-secret"],
+          config.KEYLESS_PROXY_SECRET,
+        ));
+    const hostedMcpRaise =
+      options?.hostedMcpRateLimit === true && hostedMcpCall;
+    // The tiers follow the team's own plan multiplier, not the one trusted
+    // agent traffic floors at hobby, so a free team never gets the hobby tier.
+    const hostedMcpLimiter = hostedMcpRaise
+      ? getHostedMcpRateLimiter(mode, chunk.rate_limit_multiplier, chunk.flags)
+      : undefined;
+    const hostedMcpConcurrency = hostedMcpRaise
+      ? getHostedMcpConcurrencyLimit(
+          mode,
+          chunk.concurrency_limit,
+          chunk.rate_limit_multiplier,
+          chunk.flags,
+        )
+      : undefined;
+    if (hostedMcpConcurrency !== undefined) {
+      // Only this request's chunk changes; the cached team limits do not.
+      chunk = { ...chunk, concurrency_limit: hostedMcpConcurrency };
+    }
+    if (hostedMcpLimiter) {
+      rateLimiter = hostedMcpLimiter;
+    }
+  }
+
+  const team_endpoint_token = timingSafeSecretEqual(token, config.PREVIEW_TOKEN)
+    ? iptoken
+    : teamId;
 
   try {
     await rateLimiter.consume(team_endpoint_token);
@@ -1125,7 +1212,7 @@ async function supaAuthenticateUser(
   }
 
   if (
-    token === config.PREVIEW_TOKEN &&
+    timingSafeSecretEqual(token, config.PREVIEW_TOKEN) &&
     (mode === RateLimiterMode.Scrape ||
       mode === RateLimiterMode.Preview ||
       mode === RateLimiterMode.Map ||
@@ -1179,5 +1266,6 @@ async function supaAuthenticateUser(
     team_id: teamId ?? undefined,
     org_id: chunk?.org_id ?? null,
     chunk,
+    ...(hostedMcpCall ? { hostedMcp: true } : {}),
   };
 }

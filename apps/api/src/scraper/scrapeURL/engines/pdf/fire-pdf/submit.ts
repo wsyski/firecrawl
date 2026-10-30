@@ -2,7 +2,11 @@ import type { Meta } from "../../..";
 import type { PDFMode } from "../../../../../controllers/v2/types";
 import { fetch as undiciFetch } from "undici";
 import { AbortManagerThrownError } from "../../../lib/abortManager";
-import { buildFirePdfRequestMetadata } from "./request-metadata";
+import {
+  buildFirePdfJobTrainingCapture,
+  buildFirePdfRequestMetadata,
+  firePdfTableFormat,
+} from "./request-metadata";
 import {
   firePdfAsyncSubmit503Total,
   firePdfAsyncSubmitRetriesTotal,
@@ -157,6 +161,8 @@ export async function submitJob(args: SubmitArgs): Promise<SubmitOutcome> {
       includePageMarkdown,
       includeBlocks,
       pageMarkers,
+      tableFormat: firePdfTableFormat(meta),
+      trainingCapture: buildFirePdfJobTrainingCapture(meta),
     }),
   };
 

@@ -20,8 +20,11 @@ type Provider =
   | "openrouter"
   | "fireworks"
   | "deepinfra"
-  | "vertex";
-const defaultProvider: Provider = config.OLLAMA_BASE_URL ? "ollama" : "openai";
+  | "vertex"
+  | "extraction";
+const defaultProvider: Exclude<Provider, "extraction"> = config.OLLAMA_BASE_URL
+  ? "ollama"
+  : "openai";
 
 const providerList: Record<Provider, any> = {
   openai: createOpenAI({
@@ -42,6 +45,12 @@ const providerList: Record<Provider, any> = {
   }),
   fireworks, //FIREWORKS_API_KEY
   deepinfra, //DEEPINFRA_API_KEY
+  // OpenAI-compatible JSON extraction provider (EXTRACTION_PROVIDER_*); Chat
+  // Completions only, see getModel.
+  extraction: createOpenAI({
+    apiKey: config.EXTRACTION_PROVIDER_API_KEY ?? "unused",
+    baseURL: config.EXTRACTION_PROVIDER_BASE_URL,
+  }),
   vertex: createVertex({
     project: "firecrawl",
     //https://github.com/vercel/ai/issues/6644 bug
@@ -73,6 +82,11 @@ export function getModel(
   if (provider === "openai" && modelName.startsWith("o3-mini")) {
     return withUsageTelemetry(providerList.openai.chat(modelName));
   }
+  // The extraction provider speaks Chat Completions, not the Responses API,
+  // and is not subject to the MODEL_NAME override.
+  if (provider === "extraction") {
+    return withUsageTelemetry(providerList.extraction.chat(name));
+  }
   // Custom OPENAI_BASE_URL means a third-party OpenAI-compatible server (e.g. LM Studio),
   // which typically only implements /v1/chat/completions, not OpenAI's newer /v1/responses.
   // The bare provider call defaults to the Responses API, silently dropping json_schema
@@ -85,7 +99,7 @@ export function getModel(
 
 export function getEmbeddingModel(
   name: string,
-  provider: Provider = defaultProvider,
+  provider: Exclude<Provider, "extraction"> = defaultProvider,
 ) {
   return config.MODEL_EMBEDDING_NAME
     ? providerList[provider].embedding(config.MODEL_EMBEDDING_NAME)

@@ -11,9 +11,8 @@ import {
 } from "../../lib/keyless";
 import { z } from "zod";
 import { config } from "../../config";
-import { RequestWithAuth } from "./types";
+import { countryLocationSchema, RequestWithAuth } from "./types";
 import { integrationSchema } from "../../utils/integration";
-import { countries } from "../../lib/validate-country";
 import { isAgentInteropSecretValid } from "../../lib/agent-interop";
 import {
   getBrowserSession,
@@ -52,22 +51,13 @@ export const browserCreateRequestSchema = z.object({
       saveChanges: z.boolean().default(true),
     })
     .optional(),
-  location: z
-    .strictObject({
-      country: z
-        .string()
-        .refine(
-          value => Object.keys(countries).includes(value.toUpperCase()),
-          "Invalid country code. Use a valid ISO 3166-1 alpha-2 country code.",
-        )
-        .transform(value => value.toLowerCase()),
-    })
-    .optional(),
+  location: countryLocationSchema.optional(),
   __agentInterop: z
     .object({
       auth: z.string(),
       requestId: z.string().uuid(),
       shouldBill: z.boolean(),
+      hostedMcp: z.boolean().optional(),
     })
     .optional(),
 });

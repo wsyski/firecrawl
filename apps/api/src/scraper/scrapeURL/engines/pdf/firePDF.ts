@@ -14,6 +14,8 @@ import {
 import { firePdfBlocksSchema, firePdfPagesSchema } from "./fire-pdf/schema";
 import {
   buildFirePdfRequestMetadata,
+  buildFirePdfTrainingCapture,
+  firePdfTableFormat,
   type FirePdfSourceKind,
 } from "./fire-pdf/request-metadata";
 
@@ -106,6 +108,7 @@ export async function scrapePDFWithFirePDF(
 
   const zdr = meta.internalOptions.zeroDataRetention === true;
   const pdfSha256 = createPdfCacheKey(base64Content);
+  const tableFormat = firePdfTableFormat(meta);
 
   // Explicit deadline contract with fire-pdf (mirrors mineru-api):
   //   timeout    — remaining scrape-tier budget in ms (from AbortManager)
@@ -141,6 +144,7 @@ export async function scrapePDFWithFirePDF(
       ...(includePageMarkdown && { include_page_markdown: true }),
       ...(includeBlocks && { include_blocks: true }),
       ...(pageMarkers && { page_markers: true }),
+      ...(tableFormat && { tableFormat }),
       // Enrichment for the fire-pdf jobs DB / dashboard. fire-pdf treats
       // these as optional — older fire-pdf builds will ignore unknown fields.
       team_id: meta.internalOptions.teamId,
@@ -151,6 +155,7 @@ export async function scrapePDFWithFirePDF(
       pdf_sha256: pdfSha256,
       source: "firecrawl",
       zdr,
+      training_capture: buildFirePdfTrainingCapture(meta),
       ...deadlineFields,
     },
     logger,
