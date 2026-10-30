@@ -18,7 +18,7 @@ vi.mock("../../lib/logger", () => ({
   },
 }));
 
-import { searxng_search } from "./searxng";
+import { ignoredPinnedCategories, searxng_search } from "./searxng";
 import { config } from "../../config";
 
 const get = vi.mocked(axios.get);
@@ -254,5 +254,108 @@ describe("searxng_search provenance", () => {
     expect(r.unresponsiveEngines).toEqual([
       { engine: "google", reason: "timeout" },
     ]);
+  });
+});
+
+describe("searxng_search unknown categories and engine_data", () => {
+  beforeEach(() => {
+    get.mockReset();
+  });
+
+  const respond = (data: any) => {
+    get.mockImplementation(async () => ({ data }));
+  };
+
+  it("refuses rows for a category the instance does not have", async () => {
+    // The instance answers 200 with its DEFAULT search: rows exist, but they
+    // are from engines the caller never asked for.
+    respond({
+      results: [{ url: "https://w/1", title: "W1", content: "c" }],
+      unknown_categories: ["finance-polnd"],
+    });
+    const r = await searxng_search("q", {
+      num_results: 5,
+      searxngCategory: "finance-polnd",
+    });
+    expect(r.outcome).toBe("error");
+    expect(r.results.web).toBeUndefined();
+    expect(r.detail).toContain("finance-polnd");
+    expect(r.unknownCategories).toEqual(["finance-polnd"]);
+  });
+
+  it("answers a partly-known pin with the rows the known half returned", async () => {
+    respond({
+      results: [{ url: "https://w/1", title: "W1", content: "c" }],
+      unknown_categories: ["finance-polnd"],
+    });
+    const r = await searxng_search("q", {
+      num_results: 5,
+      searxngCategory: "finance,finance-polnd",
+    });
+    expect(r.outcome).toBe("results");
+    expect(r.unknownCategories).toEqual(["finance-polnd"]);
+  });
+
+  it("reports an operator-configured unknown category without failing", async () => {
+    // Nobody pinned it per request, so the rows are what this instance always
+    // returns for that configuration: report it, do not refuse the search.
+    respond({
+      results: [{ url: "https://w/1", title: "W1", content: "c" }],
+      unknown_categories: ["general-typo"],
+    });
+    const r = await searxng_search("q", { num_results: 5 });
+    expect(r.outcome).toBe("results");
+    expect(r.unknownCategories).toEqual(["general-typo"]);
+  });
+
+  it("carries engine_data through", async () => {
+    respond({
+      results: [{ url: "https://w/1", title: "W1", content: "c" }],
+      engine_data: { sii: { dropped_rows: "7", site_rows: "10" } },
+    });
+    const r = await searxng_search("q", { num_results: 5 });
+    expect(r.engineData).toEqual({
+      sii: { dropped_rows: "7", site_rows: "10" },
+    });
+  });
+
+  it("is quiet on an instance that reports neither", async () => {
+    respond({ results: [{ url: "https://w/1", title: "W1", content: "c" }] });
+    const r = await searxng_search("q", { num_results: 5 });
+    expect(r.unknownCategories).toEqual([]);
+    expect(r.engineData).toEqual({});
+  });
+});
+
+describe("ignoredPinnedCategories", () => {
+  it("matches a pinned name the instance reported", () => {
+    expect(ignoredPinnedCategories("finance-polnd", ["finance-polnd"])).toEqual(
+      ["finance-polnd"],
+    );
+  });
+
+  it("keeps a partly-known pin: the known half still ran", () => {
+    // SearXNG drops only the unknown name, so the finance engines ran and
+    // those rows are the caller's own answer.
+    expect(
+      ignoredPinnedCategories("finance, finance-polnd", ["finance-polnd"]),
+    ).toEqual([]);
+  });
+
+  it("refuses when every pinned name was dropped", () => {
+    expect(
+      ignoredPinnedCategories("finance-polnd, finance-swedn", [
+        "finance-polnd",
+        "finance-swedn",
+      ]),
+    ).toEqual(["finance-polnd", "finance-swedn"]);
+  });
+
+  it("ignores a reported name nobody pinned", () => {
+    expect(ignoredPinnedCategories("finance", ["general-typo"])).toEqual([]);
+  });
+
+  it("is empty without a pin", () => {
+    expect(ignoredPinnedCategories(undefined, ["finance-polnd"])).toEqual([]);
   });
 });

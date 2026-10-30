@@ -53,9 +53,46 @@ def call(method: str, path: str, body: dict | None = None, timeout: int = 300,
 def warn(doc: dict, wanted: list[str]) -> None:
     if doc.get("warning"):
         print(f"!! warning: {doc['warning']}", file=sys.stderr)
-    missing = [f for f in wanted if doc.get(f) in (None, "", [])]
+    # The server's own statement, when it makes one: `droppedFormats` names the
+    # formats it could not produce (the LLM lock drops `json` and `summary`
+    # exactly this way, and the scrape still reports success). Prefer it over
+    # the inference below, which cannot tell a dropped format from an empty one.
+    dropped = [f for f in (doc.get("droppedFormats") or []) if isinstance(f, str)]
+    if dropped:
+        print(f"!! the server dropped: {', '.join(dropped)}", file=sys.stderr)
+    missing = [f for f in wanted if doc.get(f) in (None, "", []) and f not in dropped]
     if missing:
         print(f"!! requested but missing: {', '.join(missing)}", file=sys.stderr)
+
+
+def report_provenance(r: dict) -> None:
+    """What the search chain actually did, on stderr.
+
+    Four things a result list cannot show: which provider answered, an engine
+    SearXNG could not reach, a pin or a category name the instance does not
+    have (an unknown category runs the instance's DEFAULT search, so the rows
+    are from engines nobody asked for), and an engine's own report - `sii`
+    publishes how many rows its relevance filter removed.
+    """
+    prov = r.get("provenance") or {}
+    for attempt in prov.get("attempts") or []:
+        for engine in attempt.get("unresponsiveEngines") or []:
+            name = engine.get("engine") if isinstance(engine, dict) else engine
+            reason = engine.get("reason", "") if isinstance(engine, dict) else ""
+            print(f"!! {name} failed this query{': ' + reason if reason else ''}", file=sys.stderr)
+        pins = attempt.get("unknownEngines") or []
+        if pins:
+            print(f"!! this instance has no engine named: {', '.join(pins)}", file=sys.stderr)
+        cats = attempt.get("unknownCategories") or []
+        if cats:
+            print(f"!! this instance has no category named: {', '.join(cats)}", file=sys.stderr)
+            print("   an unknown category runs the DEFAULT search, so those rows are "
+                  "not the category you asked for", file=sys.stderr)
+        for engine, kv in sorted((attempt.get("engineData") or {}).items()):
+            dropped, site = kv.get("dropped_rows"), kv.get("site_rows")
+            if dropped and dropped != "0":
+                print(f"!! {engine} dropped {dropped} of {site} row(s) for missing a query term; "
+                      "a short answer here is a filter result, not an empty site", file=sys.stderr)
 
 
 def emit(doc: dict, wanted: list[str]) -> None:
@@ -140,6 +177,9 @@ def main() -> None:
     q.add_argument("query")
     q.add_argument("-n", "--limit", type=int, default=5)
     q.add_argument("--sources", default="web", help="web,news,images")
+    q.add_argument("--searxng-category", dest="searxng_category",
+                   help="a SearXNG category of this instance, e.g. finance-poland "
+                        "(NOT --categories, which is Firecrawl's own filter)")
     q.add_argument("--tbs", help="qdr:d | qdr:w | qdr:m")
     q.add_argument("--safe", action="store_true", help="drop explicit hits (Jev)")
     q.add_argument("--scrape", action="store_true", help="add markdown of each hit")
@@ -174,11 +214,17 @@ def main() -> None:
         body = {"query": a.query, "limit": a.limit, "sources": a.sources.split(",")}
         if a.tbs:
             body["tbs"] = a.tbs
+        if a.searxng_category:
+            body["searxngCategory"] = a.searxng_category
         if a.safe:
             body["safe"] = True
         if a.scrape:
             body["scrapeOptions"] = {"formats": ["markdown"]}
         r = call("POST", "/v2/search", body)
+        # Before the --json return: that is the path piped into another tool,
+        # where a silently wrong answer is least visible. stderr keeps stdout a
+        # clean JSON document.
+        report_provenance(r)
         if a.json:
             print(json.dumps(r, indent=2, ensure_ascii=False))
             return

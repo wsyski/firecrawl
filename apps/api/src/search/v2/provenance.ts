@@ -31,6 +31,20 @@ export interface SearchProviderAttempt {
    * category's whole engine set instead, which is otherwise invisible.
    */
   unknownEngines?: string[];
+  /**
+   * Category names SearXNG did not recognise, from its `unknown_categories`
+   * field. Worse than an ignored pin: an unknown category selects no engine at
+   * all, so the instance runs its DEFAULT search and the rows come from
+   * engines the caller never asked for.
+   */
+  unknownCategories?: string[];
+  /**
+   * SearXNG's `engine_data`: whatever an engine chose to report about its own
+   * response, as `engine -> { key: value }`. The instance's `sii` publishes
+   * `dropped_rows` / `site_rows` there, which is how a caller tells "the
+   * source has nothing" from "the engine's filter removed everything".
+   */
+  engineData?: Record<string, Record<string, string>>;
 }
 
 export interface SearchProvenance {
@@ -101,11 +115,50 @@ export function dedupeUnresponsiveEngines(
  * of the instance added the field, so an older or different instance simply
  * omits it.
  */
-export function normalizeUnknownEngines(raw: unknown): string[] {
+export function normalizeStringList(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
   return [
     ...new Set(
       raw.filter((v): v is string => typeof v === "string" && v.length > 0),
     ),
   ];
+}
+
+/** `unknown_engines` and `unknown_categories` have the same shape. */
+export const normalizeUnknownEngines = normalizeStringList;
+export const normalizeUnknownCategories = normalizeStringList;
+
+/**
+ * SearXNG's `engine_data` is `engine -> { key: value }`, with the values
+ * serialised as strings. Read defensively: an instance without the fork's
+ * `get_json_response` change omits the field entirely, and an engine is free
+ * to put anything in its own bucket.
+ */
+export function normalizeEngineData(
+  raw: unknown,
+): Record<string, Record<string, string>> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const out: Record<string, Record<string, string>> = {};
+  for (const [engine, bucket] of Object.entries(
+    raw as Record<string, unknown>,
+  )) {
+    if (
+      !engine ||
+      !bucket ||
+      typeof bucket !== "object" ||
+      Array.isArray(bucket)
+    )
+      continue;
+    const kv: Record<string, string> = {};
+    for (const [key, value] of Object.entries(
+      bucket as Record<string, unknown>,
+    )) {
+      if (!key) continue;
+      if (typeof value === "string") kv[key] = value;
+      else if (typeof value === "number" || typeof value === "boolean")
+        kv[key] = String(value);
+    }
+    if (Object.keys(kv).length > 0) out[engine] = kv;
+  }
+  return out;
 }

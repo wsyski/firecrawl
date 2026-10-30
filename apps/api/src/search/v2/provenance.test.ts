@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
   dedupeUnresponsiveEngines,
+  normalizeEngineData,
+  normalizeUnknownCategories,
   normalizeUnknownEngines,
   normalizeUnresponsiveEngines,
 } from "./provenance";
@@ -115,5 +117,45 @@ describe("normalizeUnknownEngines", () => {
   it("returns nothing when the instance omits the field", () => {
     expect(normalizeUnknownEngines(undefined)).toEqual([]);
     expect(normalizeUnknownEngines("a")).toEqual([]);
+  });
+});
+
+describe("normalizeUnknownCategories", () => {
+  it("reads the instance's list of ignored category names", () => {
+    // Observed live: ?categories=finance-polnd answered 36 default-web rows.
+    expect(normalizeUnknownCategories(["finance-polnd"])).toEqual([
+      "finance-polnd",
+    ]);
+  });
+
+  it("returns nothing when the instance omits the field", () => {
+    expect(normalizeUnknownCategories(undefined)).toEqual([]);
+  });
+});
+
+describe("normalizeEngineData", () => {
+  it("reads engine -> {key: value}", () => {
+    expect(
+      normalizeEngineData({ sii: { dropped_rows: "7", site_rows: "10" } }),
+    ).toEqual({ sii: { dropped_rows: "7", site_rows: "10" } });
+  });
+
+  it("stringifies numbers and booleans an engine may emit", () => {
+    expect(normalizeEngineData({ sii: { dropped_rows: 7, ok: true } })).toEqual(
+      {
+        sii: { dropped_rows: "7", ok: "true" },
+      },
+    );
+  });
+
+  it("drops buckets that carry nothing readable", () => {
+    expect(
+      normalizeEngineData({ a: {}, b: null, c: [1], d: { k: { deep: 1 } } }),
+    ).toEqual({});
+  });
+
+  it("returns nothing when the instance omits the field", () => {
+    expect(normalizeEngineData(undefined)).toEqual({});
+    expect(normalizeEngineData([1, 2])).toEqual({});
   });
 });

@@ -136,6 +136,12 @@ export async function search({
         ...(searxng.unknownEngines.length
           ? { unknownEngines: searxng.unknownEngines }
           : {}),
+        ...(searxng.unknownCategories.length
+          ? { unknownCategories: searxng.unknownCategories }
+          : {}),
+        ...(Object.keys(searxng.engineData).length
+          ? { engineData: searxng.engineData }
+          : {}),
       });
       if (hasAnyResult(searxng.results))
         return { ...searxng.results, provenance: provenance() };

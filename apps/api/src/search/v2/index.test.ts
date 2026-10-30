@@ -33,6 +33,8 @@ const searxngResult = (over: Partial<any> = {}) => ({
   outcome: "empty" as const,
   unresponsiveEngines: [],
   unknownEngines: [],
+  unknownCategories: [],
+  engineData: {},
   categories: { web: "general" },
   ...over,
 });
@@ -174,5 +176,32 @@ describe("search provider chain provenance", () => {
       detail: "boom",
     });
     expect(r.web).toBeUndefined();
+  });
+
+  it("carries unknownCategories and engineData onto the searxng attempt", async () => {
+    searxng.mockResolvedValue(
+      searxngResult({
+        results: { web: [webRow] },
+        outcome: "results",
+        unknownCategories: ["finance-polnd"],
+        engineData: { sii: { dropped_rows: "7", site_rows: "10" } },
+      }),
+    );
+    const r = await search({ query: "q", logger });
+    const attempt = r.provenance!.attempts.find(a => a.provider === "searxng")!;
+    expect(attempt.unknownCategories).toEqual(["finance-polnd"]);
+    expect(attempt.engineData).toEqual({
+      sii: { dropped_rows: "7", site_rows: "10" },
+    });
+  });
+
+  it("leaves both fields off when the instance reports neither", async () => {
+    searxng.mockResolvedValue(
+      searxngResult({ results: { web: [webRow] }, outcome: "results" }),
+    );
+    const r = await search({ query: "q", logger });
+    const attempt = r.provenance!.attempts.find(a => a.provider === "searxng")!;
+    expect(attempt).not.toHaveProperty("unknownCategories");
+    expect(attempt).not.toHaveProperty("engineData");
   });
 });

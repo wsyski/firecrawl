@@ -32,6 +32,7 @@ fc scrape https://example.com -f summary              # local LLM
 fc scrape https://example.com --prompt "title and purpose" \
    --schema '{"type":"object","properties":{"title":{"type":"string"}}}'
 fc search "AI regulation" -n 5 --sources web,news --tbs qdr:w [--safe] [--scrape]
+fc search "kghm" -n 5 --searxng-category finance-poland   # a SearXNG category of this instance
 fc map https://docs.firecrawl.dev | grep api-reference
 fc crawl https://docs.firecrawl.dev -n 10 --include '^/api-reference/.*'
 fc batch https://example.com https://example.org
@@ -39,7 +40,15 @@ fc parse document.pdf
 ```
 
 - `crawl` and `batch` poll until done and follow `next` pages. Progress goes to stderr.
-- A dropped format or `.data.warning` is printed to stderr as `!!`. Do not suppress it.
+- A dropped format or `.data.warning` is printed to stderr as `!!`. Do not suppress it:
+  `droppedFormats` is the server naming what it could not produce (the LLM lock drops `json` and
+  `summary` that way, and the scrape still reports success).
+- `search` prints what the chain actually did to stderr, `--json` included: an engine SearXNG could
+  not reach, a pin or a **category name the instance does not have** (that runs the instance's
+  DEFAULT search, so the rows are from engines nobody asked for), and `sii`'s count of the rows its
+  relevance filter removed. Silence there means the answer is what you asked for.
+- `--searxng-category` is the instance's own category (`finance-poland`, `science`, comma-separated
+  for several). Not `--categories`, which is Firecrawl's github/research/pdf filter.
 - Other options: `--wait MS`, `--all-content` (keep nav and footer), `--json` (raw response,
   goes before the command), `--timeout S`, and `FIRECRAWL_API_URL` to override the endpoint.
 
@@ -100,7 +109,11 @@ curl -s $FC/v2/search -H 'Content-Type: application/json' \
   nothing exists — read `.provenance` to tell the two apart: `.provenance.provider` is whichever
   provider answered, `.provenance.attempts[]` carries each provider's `outcome`
   (`results`/`empty`/`error`/`skipped`), SearXNG's own failed engines in `unresponsiveEngines` and
-  ignored engine pins in `unknownEngines`. `jq '.provenance'` first, `/searxng` only if the engines
+  ignored engine pins in `unknownEngines`, ignored category names in
+  `unknownCategories` (when EVERY name in a pinned `searxngCategory` is one the instance does not
+  have, the search fails with `outcome: "error"` rather than answering with the default search's
+  rows; a partly-known pin still answers, since the known half ran), and an
+  engine's own report — `sii`'s `dropped_rows` / `site_rows` — in `engineData`. `jq '.provenance'` first, `/searxng` only if the engines
   are the problem.
 
 ### Map a site (URL discovery)

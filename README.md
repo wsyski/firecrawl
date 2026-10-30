@@ -31,6 +31,9 @@
 | 10-minute timeouts for JSON/extract requests (slow local models) | automatic | `apps/api/src/controllers/v1/types.ts` |
 | `restart: unless-stopped` on all long-running services | automatic | `docker-compose.yaml` |
 | Search via a local SearXNG instead of rate-limited DuckDuckGo | `SEARXNG_ENDPOINT=http://192.168.1.100:8888` | `.env`; SearXNG itself: `/opt/playground/searxng` |
+| Pick a SearXNG category per request (`finance-poland`, …) | `"searxngCategory"` in the `/v2/search` body | `apps/api/src/search/v2/searxng.ts` |
+| Say which provider answered and what it ignored | automatic (`provenance` beside `data`) | `apps/api/src/search/v2/provenance.ts` |
+| Name a requested format the scrape could not produce | automatic (`data.droppedFormats`) | `apps/api/src/lib/dropped-formats.ts` |
 | Safe-search results filtered by Jev (TypeSafe) | `TYPESAFE_API_KEY`, `TYPESAFE_BASE_URL`, `TYPESAFE_MODEL` | `apps/api/src/lib/typesafe.ts` |
 
 All LLM-side behaviour lives in `localModelFetch` (`apps/api/src/lib/local-model.ts`), installed as the
@@ -148,6 +151,18 @@ not have to agree on anything to work.
 This is deliberate: SearXNG reads an empty `categories=` as *unspecified* and falls back to `general`
 (`searx/webadapter.py`, `get_selected_categories`). A non-empty value is a filter applied on top.
 
+##### What the response says about its own answer
+
+`/v2/search` returns a `provenance` object beside `data` (2026-10-30). It names the provider that
+answered, every attempt in chain order with its outcome, and what SearXNG reported about itself:
+`unresponsiveEngines`, `unknownEngines` (a pin this instance does not have), `unknownCategories`
+(a category it does not have — that selects no engine, so the instance runs its DEFAULT search and
+the rows come from engines nobody asked for) and `engineData` (`sii` publishes `dropped_rows` /
+`site_rows`, the difference between an empty source and an emptied filter). When every name in a
+caller's own `searxngCategory` was dropped, the search now fails with `outcome: "error"` instead of
+passing those substituted rows off as the answer. A scrape has the matching field, `droppedFormats`,
+naming a requested format the server could not produce. `DESIGN.md` has the full shape.
+
 Two consequences worth knowing:
 
 - A category with no enabled engines returns `200` with zero results and an **empty
@@ -206,9 +221,19 @@ default `general`/`news` query does not run them. `currency` is still empty — 
 currency engine here.
 
 `sources` maps to a category per request: `news` → `SEARXNG_NEWS_CATEGORIES`, `images` → `images`,
-and web → `SEARXNG_CATEGORIES` (empty means the instance default). There is no per-request
-`finance`/`finance-poland` option and `--categories` is Firecrawl's own github/research/pdf filter;
-for Polish finance, call the SearXNG `/search` endpoint directly.
+and web → `SEARXNG_CATEGORIES` (empty means the instance default). **`searxngCategory` overrides all
+three per request** (2026-10-30): a comma-separated list of the instance's own category names, which
+also clears the `SEARXNG_ENGINES` pin and suppresses the DuckDuckGo fallback, since DDG cannot serve
+a category. `--categories` remains Firecrawl's own github/research/pdf filter and has nothing to do
+with it.
+
+```bash
+curl -s $FC/v2/search -H 'Content-Type: application/json' \
+  -d '{"query":"kghm","limit":5,"searxngCategory":"finance-poland"}' | jq '.data.web[].url'
+```
+
+The field is API-only: the separate `firecrawl-cli` has no `--searxng-category`, so a CLI caller
+either posts the body itself or uses the skill's `fc --searxng-category`.
 
 **Time filters.** `tbs` is forwarded as SearXNG `time_range` for `qdr:d/w/m/y` (`qdr:h` is dropped).
 The news path is currently empty when a range is set: the only range-capable news engine here is

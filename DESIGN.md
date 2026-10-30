@@ -141,6 +141,29 @@ the category's whole engine set. The field is new in the LAN instance's own fork
 `unknown_engines: ["no such engine"]`), read through
 `normalizeUnknownEngines` so an instance that omits it simply reports none.
 
+`unknownCategories` is the same report one level up, and the failure it covers
+is worse. An unknown `categories=` name selects no engine at all, so the
+instance runs its DEFAULT search: `categories=finance-polnd` (one letter off
+`finance-poland`) answered 36 rows from `mwmbl`, `duckduckgo web` and `yahoo`,
+with `unknown_engines` empty because nothing was pinned. **When EVERY name in the caller's own
+`searxngCategory` was dropped, the adapter now refuses those rows**
+(`outcome: "error"`, the names in `detail`) instead of returning another
+category's results as the answer — the same wrong-category rule the
+DuckDuckGo guard below already follows. A partly-known pin
+still answers: `finance,finance-polnd` leaves `finance` in the list, so its
+engines ran and those rows are the caller's own — only a pin where nothing
+survived produces somebody else's. A name that came from `SEARXNG_CATEGORIES`
+or the news default is an operator misconfiguration, not this request's
+problem: it is reported in `unknownCategories` and the search still answers.
+
+`engineData` is SearXNG's `engine_data`, the channel an engine uses to report
+something about its own response. The LAN instance's `sii` publishes
+`dropped_rows` / `site_rows` there on every response, which is the difference
+between "the source has nothing" and "the engine's relevance filter removed
+everything". Read through `normalizeEngineData`; an instance that omits the
+field reports none, and the attempt carries the key only when something is in
+it.
+
 `provider` names whichever attempt returned results and is absent when none
 did. `outcome` is one of `results` / `empty` / `error` / `skipped`, so both a
 fallthrough and a failure are visible; `searxng_search` returns its outcome
@@ -188,6 +211,16 @@ Two consequences, both deliberate:
 - **SearXNG only.** On a fire-engine deployment the field is inert and the
   attempt carries a `detail` saying so. The categories a request actually used
   come back in `provenance.searxngCategories`, so a caller never has to assume.
+- **A category this instance does not have is refused, not substituted.** See
+  `unknownCategories` above. The instance has to report it for this to work:
+  without `unknown_categories` in the response there is nothing to key on, and
+  the default search's rows are indistinguishable from the pinned category's.
+
+**Not reachable from the CLI.** `firecrawl search` (the separate `firecrawl-cli`
+project; this repo carries only a link) has `--sources` and `--categories` —
+Firecrawl's own github/research/pdf filter — and no `--searxng-category`, so
+`searxngCategory` is an API-body field only. That is why the portfolio's
+`finance_news.py` still talks to SearXNG directly.
 
 **Source mapping.** `sources` reaches SearXNG as a category: `news` → `SEARXNG_NEWS_CATEGORIES` (here
 `news`), `images` → `images`, web → `SEARXNG_CATEGORIES` (`general`, see below). A per-request

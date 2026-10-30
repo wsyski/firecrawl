@@ -4,6 +4,8 @@ import { SearchResultType, SearchV2Response } from "../../lib/entities";
 import { logger } from "../../lib/logger";
 import {
   dedupeUnresponsiveEngines,
+  normalizeEngineData,
+  normalizeUnknownCategories,
   normalizeUnknownEngines,
   normalizeUnresponsiveEngines,
   SearchProviderOutcome,
@@ -40,6 +42,10 @@ export interface SearxngSearchResult {
   unresponsiveEngines: UnresponsiveEngine[];
   /** Engine pins the instance did not recognise and ignored. */
   unknownEngines: string[];
+  /** Category names the instance did not recognise and ignored. */
+  unknownCategories: string[];
+  /** Per-engine self-reports from SearXNG's `engine_data`. */
+  engineData: Record<string, Record<string, string>>;
   categories: Partial<Record<SearchResultType, string>>;
 }
 
@@ -55,6 +61,36 @@ const categoryOf = (
     : type === "images"
       ? "images"
       : undefined);
+
+/**
+ * The names from a request's `searxngCategory` that the instance reported as
+ * unknown, and only when EVERY pinned name is one of them.
+ *
+ * SearXNG runs its default search when the category list ends up empty, so
+ * `finance,finance-polnd` still runs the `finance` engines and those rows are
+ * the caller's own: refusing them would throw away a real answer over a typo
+ * in a second name. Only a pin where nothing survived produces rows from
+ * engines nobody asked for. A name that came from `SEARXNG_CATEGORIES` or the
+ * news default is an operator misconfiguration, reported in provenance but
+ * never a reason to fail a search.
+ */
+export function ignoredPinnedCategories(
+  requested: string | undefined,
+  unknown: string[],
+): string[] {
+  if (!requested || unknown.length === 0) return [];
+  const reported = new Set(unknown);
+  const pinned = [
+    ...new Set(
+      requested
+        .split(",")
+        .map(c => c.trim())
+        .filter(c => c.length > 0),
+    ),
+  ];
+  if (pinned.length === 0) return [];
+  return pinned.every(c => reported.has(c)) ? pinned : [];
+}
 
 // SearXNG's time_range has no hour bucket; qdr:h is deliberately dropped rather
 // than sent as an unsupported value.
@@ -90,6 +126,8 @@ export async function searxng_search(
 
   const unresponsiveEngines: UnresponsiveEngine[] = [];
   const unknownEngines: string[] = [];
+  const unknownCategories: string[] = [];
+  const engineData: Record<string, Record<string, string>> = {};
   const categories: Partial<Record<SearchResultType, string>> = {};
 
   const fetchPage = async (
@@ -129,6 +167,12 @@ export async function searxng_search(
       ...normalizeUnresponsiveEngines(data?.unresponsive_engines),
     );
     unknownEngines.push(...normalizeUnknownEngines(data?.unknown_engines));
+    unknownCategories.push(
+      ...normalizeUnknownCategories(data?.unknown_categories),
+    );
+    // Last page wins per engine: a later page's cursor or count supersedes an
+    // earlier one, and the keys are the engine's own.
+    Object.assign(engineData, normalizeEngineData(data?.engine_data));
 
     if (data && Array.isArray(data.results)) {
       return data.results.map(mappers[type]);
@@ -146,6 +190,8 @@ export async function searxng_search(
     ...(detail ? { detail } : {}),
     unresponsiveEngines: dedupeUnresponsiveEngines(unresponsiveEngines),
     unknownEngines: [...new Set(unknownEngines)],
+    unknownCategories: [...new Set(unknownCategories)],
+    engineData,
     categories,
   });
 
@@ -182,12 +228,31 @@ export async function searxng_search(
       }
     }
 
+    // A pin where NO name survived selects no engine, so SearXNG ran its
+    // DEFAULT search and these rows belong to engines the caller never asked
+    // for. Returning them as the pinned category's results is the same
+    // wrong-category answer the DuckDuckGo fallback already refuses to give,
+    // so refuse here too rather than pass substituted rows off as the answer.
+    const refused = ignoredPinnedCategories(
+      options.searxngCategory,
+      unknownCategories,
+    );
+    if (refused.length > 0) {
+      return empty(
+        "error",
+        `SearXNG has no category ${refused.map(c => `"${c}"`).join(", ")}; ` +
+          "it ran its default search instead",
+      );
+    }
+
     const found = types.some(type => (response[type]?.length ?? 0) > 0);
     return {
       results: response,
       outcome: found ? "results" : "empty",
       unresponsiveEngines: dedupeUnresponsiveEngines(unresponsiveEngines),
       unknownEngines: [...new Set(unknownEngines)],
+      unknownCategories: [...new Set(unknownCategories)],
+      engineData,
       categories,
     };
   } catch (error) {
