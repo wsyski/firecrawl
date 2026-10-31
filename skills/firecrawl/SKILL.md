@@ -35,7 +35,7 @@ fc scrape https://example.com -f summary              # local LLM
 fc scrape https://example.com --prompt "title and purpose" \
    --schema '{"type":"object","properties":{"title":{"type":"string"}}}'
 fc search "AI regulation" -n 5 --sources web,news --tbs qdr:w [--safe] [--scrape]
-fc search "kghm" -n 5 --searxng-category finance-poland   # a SearXNG category of this instance
+fc search "kghm" -n 5 --searxng-category 'finance poland'   # a SearXNG category of this instance
 fc map https://docs.firecrawl.dev | grep api-reference
 fc crawl https://docs.firecrawl.dev -n 10 --include '^/api-reference/.*'
 fc batch https://example.com https://example.org
@@ -50,7 +50,7 @@ fc parse document.pdf
   not reach, a pin or a **category name the instance does not have** (that runs the instance's
   DEFAULT search, so the rows are from engines nobody asked for), and `sii`'s count of the rows its
   relevance filter removed. Silence there means the answer is what you asked for.
-- `--searxng-category` is the instance's own category (`finance-poland`, `science`, comma-separated
+- `--searxng-category` is the instance's own category (`finance poland`, `science`, comma-separated
   for several). Not `--categories`, which is Firecrawl's github/research/pdf filter.
 - Other options: `--wait MS`, `--all-content` (keep nav and footer), `--json` (raw response,
   goes before the command), `--timeout S`, and `FIRECRAWL_ENDPOINT` to override the endpoint
@@ -99,7 +99,7 @@ curl -s $FC/v2/search -H 'Content-Type: application/json' \
   `SEARXNG_CATEGORIES` (`general`). `--categories` is Firecrawl's own github/research/pdf filter,
   **not** a SearXNG category.
 - `"searxngCategory":"finance"` picks a SearXNG category per request — any name the instance knows
-  (`finance`, `finance-poland`, `science`, `q&a`, comma-separated for several). It overrides the
+  (`finance`, `finance poland`, `science`, `q&a`, comma-separated for several). It overrides the
   category every requested source maps to, and suppresses the DuckDuckGo fallback, which cannot
   serve a category. The categories a request actually used come back in
   `.provenance.searxngCategories`.

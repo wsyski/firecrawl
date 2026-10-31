@@ -2605,7 +2605,7 @@ const searchDomainSchema = z
 // Category names are instance configuration, not a fixed Firecrawl enum, so
 // the value is validated by shape rather than against a list: SearXNG's own
 // names use lowercase letters, digits, spaces, "&" and "-" ("q&a",
-// "stock images", "finance-poland").
+// "stock images", "finance poland").
 const searxngCategorySchema = z
   .string()
   .trim()
@@ -2665,7 +2665,7 @@ export const searchRequestSchema = z
     location: z.string().optional(),
     /**
      * A SearXNG category for this request, as the instance names it
-     * ("finance", "science", "finance-poland", ...). Distinct from
+     * ("finance", "science", "finance poland", ...). Distinct from
      * `categories`, which is Firecrawl's own github/research/pdf filter.
      * Only the SearXNG provider reads it; the categories a request actually
      * used come back in `provenance.searxngCategories`. A comma-separated

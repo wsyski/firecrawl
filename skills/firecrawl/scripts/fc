@@ -207,7 +207,7 @@ def main() -> None:
     q.add_argument("-n", "--limit", type=int, default=5)
     q.add_argument("--sources", default="web", help="web,news,images")
     q.add_argument("--searxng-category", dest="searxng_category",
-                   help="a SearXNG category of this instance, e.g. finance-poland "
+                   help="a SearXNG category of this instance, e.g. finance poland "
                         "(NOT --categories, which is Firecrawl's own filter)")
     q.add_argument("--tbs", help="qdr:d | qdr:w | qdr:m")
     q.add_argument("--safe", action="store_true", help="drop explicit hits (Jev)")

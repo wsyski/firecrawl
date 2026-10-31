@@ -169,11 +169,11 @@ describe("searxng_search per-request category", () => {
     await searxng_search("q", {
       num_results: 5,
       type: "news",
-      searxngCategory: "finance-poland",
+      searxngCategory: "finance poland",
     });
     expect(get.mock.calls[0][1]!.params).toMatchObject({
       engines: "",
-      categories: "finance-poland",
+      categories: "finance poland",
     });
   });
 

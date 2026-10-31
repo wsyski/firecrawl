@@ -144,7 +144,7 @@ the category's whole engine set. The field is new in the LAN instance's own fork
 `unknownCategories` is the same report one level up, and the failure it covers
 is worse. An unknown `categories=` name selects no engine at all, so the
 instance runs its DEFAULT search: `categories=finance-polnd` (one letter off
-`finance-poland`) answered 36 rows from `mwmbl`, `duckduckgo web` and `yahoo`,
+`finance poland`) answered 36 rows from `mwmbl`, `duckduckgo web` and `yahoo`,
 with `unknown_engines` empty because nothing was pinned. **When EVERY name in the caller's own
 `searxngCategory` was dropped, the adapter now refuses those rows**
 (`outcome: "error"`, the names in `detail`) instead of returning another
@@ -174,7 +174,7 @@ instead of a bare `{}` for exactly this reason. Types live in
 categories (`currency`, `weather`, `define`, `translate`) reply in `.answers`
 instead, which Firecrawl discards at the mapper. A `searxngCategory` naming one
 of those therefore reports `empty` for a query the instance did answer. The
-categories the portfolio needs (`finance`, `finance-poland`) return ordinary
+categories the portfolio needs (`finance`, `finance poland`) return ordinary
 `.results` rows and are unaffected; passing `.answers` through is a separate
 change.
 
@@ -193,7 +193,7 @@ instead of failing the search.
 
 `categories` is Firecrawl's own github/research/pdf/developer/gov filter and has
 nothing to do with SearXNG's categories, so there was no way to ask this
-instance for `finance` or `finance-poland` — the reason the portfolio project
+instance for `finance` or `finance poland` — the reason the portfolio project
 kept a second SearXNG client of its own. `/v2/search` now accepts
 **`searxngCategory`**, a comma-separated list of the instance's own category
 names, validated by shape rather than against a list because the names are

@@ -31,7 +31,7 @@
 | 10-minute timeouts for JSON/extract requests (slow local models) | automatic | `apps/api/src/controllers/v1/types.ts` |
 | `restart: unless-stopped` on all long-running services | automatic | `docker-compose.yaml` |
 | Search via a local SearXNG instead of rate-limited DuckDuckGo | `SEARXNG_ENDPOINT=http://192.168.1.100:8888` | `.env`; SearXNG itself: `/opt/playground/searxng` |
-| Pick a SearXNG category per request (`finance-poland`, …) | `"searxngCategory"` in the `/v2/search` body | `apps/api/src/search/v2/searxng.ts` |
+| Pick a SearXNG category per request (`finance poland`, …) | `"searxngCategory"` in the `/v2/search` body | `apps/api/src/search/v2/searxng.ts` |
 | Say which provider answered and what it ignored | automatic (`provenance` beside `data`) | `apps/api/src/search/v2/provenance.ts` |
 | Name a requested format the scrape could not produce | automatic (`data.droppedFormats`) | `apps/api/src/lib/dropped-formats.ts` |
 | Safe-search results filtered by Jev (TypeSafe) | `TYPESAFE_API_KEY`, `TYPESAFE_BASE_URL`, `TYPESAFE_MODEL` | `apps/api/src/lib/typesafe.ts` |
@@ -183,7 +183,7 @@ against the live instance, results per single-category query:
 | *(empty → `general`)* | mwmbl, duckduckgo web, yahoo, wikipedia |
 | `news` | duckduckgo news, qwant news, wikinews, bing news (ranged queries: bing news only) |
 | `finance` | sii, dna rynkow, ksiazak, stooq |
-| `finance-poland` | the same four — Polish subset of `finance` |
+| `finance poland` | the same four — Polish subset of `finance` |
 | `it` | stackoverflow, askubuntu, superuser, mdn, github, npm, lib.rs, hoogle, docker hub |
 | `packages` | npm, crates.io, packagist, pub.dev, hex, lib.rs, hoogle, docker hub |
 | `repos` | github, gitlab, codeberg, gitea, huggingface, sourcehut |
@@ -215,7 +215,7 @@ Note the grouping is **per request, not per source**: `--sources web` sends `SEA
 (`apps/api/src/search/v2/searxng.ts`, `categoryOf`). `SEARXNG_ENGINES` is deliberately dropped for
 news and images — an engine pin like `yahoo,mwmbl` would leave those categories with nothing to run.
 
-`finance` and `finance-poland` exist in this deployment (the four fork engines: `sii`,
+`finance` and `finance poland` exist in this deployment (the four fork engines: `sii`,
 `dna rynkow`, `ksiazak`, `stooq`). They are opt-in: the engines are in no other category, so a
 default `general`/`news` query does not run them. `currency` is still empty — SearXNG ships no
 currency engine here.
@@ -229,7 +229,7 @@ with it.
 
 ```bash
 curl -s $FC/v2/search -H 'Content-Type: application/json' \
-  -d '{"query":"kghm","limit":5,"searxngCategory":"finance-poland"}' | jq '.data.web[].url'
+  -d '{"query":"kghm","limit":5,"searxngCategory":"finance poland"}' | jq '.data.web[].url'
 ```
 
 The field is API-only: the separate `firecrawl-cli` has no `--searxng-category`, so a CLI caller
