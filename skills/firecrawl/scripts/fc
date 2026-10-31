@@ -26,7 +26,30 @@ import urllib.request
 import uuid
 
 DEFAULT_URL = "http://192.168.1.100:3002"
-BASE = (os.environ.get("FIRECRAWL_API_URL") or DEFAULT_URL).rstrip("/")
+
+
+def endpoint() -> tuple[str, str]:
+    """(url, origin) for this instance; the origin is reported, not guessed at.
+
+    FIRECRAWL_ENDPOINT first, and the order is not cosmetic: FIRECRAWL_API_URL
+    is in Hermes' static provider blocklist
+    (tools/environments/local_env_policy.py), so Hermes strips it from every
+    child environment it builds - a terminal spawn, execute_code, a no_agent
+    cron job. Inside an agent this script therefore never saw that variable and
+    silently used the built-in default below. That default is right on the host
+    it was written for and wrong everywhere else, and it went unnoticed because
+    the Firecrawl container publishes on every interface while SearXNG
+    publishes on the LAN address alone. FIRECRAWL_ENDPOINT is unregistered, so
+    it survives.
+    """
+    for name in ("FIRECRAWL_ENDPOINT", "FIRECRAWL_API_URL"):
+        value = (os.environ.get(name) or "").strip()
+        if value:
+            return value.rstrip("/"), name
+    return DEFAULT_URL, "the built-in default"
+
+
+BASE, BASE_ORIGIN = endpoint()
 
 
 def die(msg: str) -> None:
@@ -46,7 +69,10 @@ def call(method: str, path: str, body: dict | None = None, timeout: int = 300,
         detail = exc.read().decode("utf-8", "replace")[:500]
         die(f"HTTP {exc.code} from {path}: {detail}")
     except urllib.error.URLError as exc:
-        die(f"cannot reach {BASE} ({exc.reason}); is the stack up? docker compose ps")
+        hint = ("; is the stack up? docker compose ps" if BASE_ORIGIN != "the built-in default"
+                else " — and that URL came from the built-in default, not from "
+                     "FIRECRAWL_ENDPOINT, so it may simply be the wrong host")
+        die(f"cannot reach {BASE} ({exc.reason}){hint}")
     return {}
 
 
@@ -160,7 +186,10 @@ def multipart(path: str) -> tuple[bytes, str]:
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(prog="fc", description=f"Self-hosted Firecrawl at {BASE} (FIRECRAWL_API_URL).")
+    p = argparse.ArgumentParser(
+        prog="fc",
+        description=f"Self-hosted Firecrawl at {BASE} (from {BASE_ORIGIN}; "
+                    "set FIRECRAWL_ENDPOINT to change it).")
     p.add_argument("--json", action="store_true", help="raw JSON response")
     p.add_argument("--timeout", type=int, default=300, help="seconds to wait for async jobs")
     sub = p.add_subparsers(dest="cmd", required=True)

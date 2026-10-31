@@ -12,7 +12,10 @@ metadata:
 Firecrawl runs from `/opt/playground/firecrawl` (Docker Compose) on `192.168.1.100:3002`.
 LLM formats go to llama-swap (`192.168.1.100:8081`); search goes to SearXNG (`192.168.1.100:8888`).
 
-- Endpoint: `FC=${FIRECRAWL_API_URL:-http://192.168.1.100:3002}`
+- Endpoint: `FC=${FIRECRAWL_ENDPOINT:-${FIRECRAWL_API_URL:-http://192.168.1.100:3002}}` — prefer
+  `FIRECRAWL_ENDPOINT`: `FIRECRAWL_API_URL` is in Hermes' provider blocklist, so Hermes strips it
+  from a terminal, `execute_code` or cron child and the fallback address is used silently. `fc`
+  prints which of the three it used in `--help`, and says so when a call cannot reach the host.
 - No API key, no auth header. No credits are enforced.
 - Health: `curl -s $FC/v0/health/liveness` → `{"status":"ok"}`.
 - `maxConcurrency` is 2 and the GPU is shared: **run requests sequentially**.
@@ -50,7 +53,8 @@ fc parse document.pdf
 - `--searxng-category` is the instance's own category (`finance-poland`, `science`, comma-separated
   for several). Not `--categories`, which is Firecrawl's github/research/pdf filter.
 - Other options: `--wait MS`, `--all-content` (keep nav and footer), `--json` (raw response,
-  goes before the command), `--timeout S`, and `FIRECRAWL_API_URL` to override the endpoint.
+  goes before the command), `--timeout S`, and `FIRECRAWL_ENDPOINT` to override the endpoint
+  (`FIRECRAWL_API_URL` still works, where it survives the scrub).
 
 ## Raw API
 
