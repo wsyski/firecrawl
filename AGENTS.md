@@ -13,7 +13,8 @@ infrastructure, and toolchain quirks.
   plus `config.ts`, `controllers/v1/types.ts`, `docker-compose.yaml`, and the README fork section.
 - **Agent skill:** `skills/firecrawl/` is the source of truth for the `/firecrawl` skill in the user
   hub (`~/.agents/skills/firecrawl`). It documents only what this instance does. After editing it, run
-  `skills/sync.sh sync`; `skills/sync.sh check` fails on drift. Upstream's build skills were removed
+  `bin/deploy-skills.sh --apply`; `bin/deploy-skills.sh --check` fails on drift, and with no flag the
+  script only previews. Upstream's build skills were removed
   from `skills/`. If an upstream merge touches them, resolve the modify/delete conflict with `git rm`.
   Rationale: [DESIGN.md](DESIGN.md#agent-skill).
 - **Skill validation:** every `SKILL.md` is linted by agnix (`.agnix.toml` + the `node:test` case in

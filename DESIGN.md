@@ -284,10 +284,11 @@ browser/interact and agent don't exist. LLM formats run on the local model. Ever
 was run against this instance; the unsupported list comes from the same probe.
 
 The skill describes this deployment, so it lives next to it and is mirrored into `~/.agents/skills/`
-by `skills/sync.sh`. That inverts the hub's "~/.agents is the source of truth" rule, as
-`/opt/playground/searxng` does. Without the hub, `check` skips instead of failing, so CI is unaffected.
+by `bin/deploy-skills.sh` (no flag previews the plan and the drift; `--apply` writes; `--check`
+is the drift gate). That inverts the hub's "~/.agents is the source of truth" rule, as
+`/opt/playground/searxng` does. Without the hub, `--check` skips instead of failing, so CI is unaffected.
 The skill has no `routes`/`requires` in `~/.agents/manual-skills.json`. With them, `/skill-sync` would
-stamp a generated block into the hub copy and `check` would report drift permanently.
+stamp a generated block into the hub copy and `--check` would report drift permanently.
 
 ## Toolchain and environment quirks
 

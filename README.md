@@ -102,6 +102,12 @@ LOGGING_LEVEL=info                             # the default "debug" dumps every
 
 The model server must listen on all interfaces, not only localhost, or the containers cannot reach it.
 
+Redeploying after a code change: `bin/deploy-docker.sh` (no flag) prints what would be
+rebuilt and what is running; `--apply` rebuilds `api`, `playwright-service` and
+`nuq-postgres` from this working tree and recreates the containers. A running container
+keeps the image it started with, so `docker compose up -d` alone would leave the old code
+in place without saying so.
+
 #### Search (SearXNG)
 
 `/v2/search` tries fire-engine → SearXNG → DuckDuckGo (`apps/api/src/search/v2/index.ts`). SearXNG
@@ -357,6 +363,20 @@ installed vitest directly:
 cd apps/api
 node "$(ls -d node_modules/.pnpm/vitest@*/node_modules/vitest | head -1)/vitest.mjs" run src/lib/local-model.test.ts
 ```
+
+### The `/firecrawl` skill
+
+`skills/firecrawl/` is the one skill this fork authors. It documents only what this
+instance does — the local model, the unsupported cloud features — so it lives next to
+the deployment and is mirrored into the user hub every harness loads from
+(`~/.agents/skills/firecrawl`) by `bin/deploy-skills.sh`:
+
+    bin/deploy-skills.sh            # preview: the plan and the drift, nothing written
+    bin/deploy-skills.sh --apply    # back up the hub copy, then mirror
+    bin/deploy-skills.sh --check    # drift gate: exit 1 when the hub copy differs
+
+Run one after editing the skill; a stale hub copy keeps answering `/firecrawl` with
+the old text. `--check` skips cleanly when there is no hub, so CI is unaffected.
 
 ### Keeping up with upstream
 
