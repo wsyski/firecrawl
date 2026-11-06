@@ -54,7 +54,8 @@ fc parse document.pdf
   for several). Not `--categories`, which is Firecrawl's research/pdf/developer/gov filter
   (`github` was removed upstream and now answers HTTP 400; use `developer` or `includeDomains`).
 - Other options: `--wait MS`, `--all-content` (keep nav and footer), `--json` (raw response,
-  goes before the command), `--timeout S`, and `FIRECRAWL_ENDPOINT` to override the endpoint
+  goes before the command), `--timeout S` (a scrape's own limit, sent to the API, and the wait for
+  async jobs), and `FIRECRAWL_ENDPOINT` to override the endpoint
   (`FIRECRAWL_API_URL` still works, where it survives the scrub).
 
 ## Raw API
@@ -70,7 +71,15 @@ curl -s $FC/v2/scrape -H 'Content-Type: application/json' \
 ```
 
 Formats: `markdown` (default), `html`, `rawHtml`, `links`. Options: `onlyMainContent`,
-`waitFor` (ms, for JS pages; Liferay Learn search needs `6000`). PDF URLs work and add `numPages`.
+`waitFor` (ms, for JS pages; Liferay Learn search needs `6000`), `timeout` (ms). PDF URLs work and
+add `numPages`.
+**The API stops a scrape at 60 s unless the request names `"timeout"`.** A page that takes longer
+comes back as a timeout error, not markdown. Fetching is rarely the slow part: turning a large page
+into markdown is, and on a busy machine (a local LLM holding the CPU, the worker logging "Can't
+accept connection due to RAM/CPU load") two 150k-character biznesradar.pl pages took 80 s, 2 s of
+it the fetch (2026-11-06). Send `"timeout":150000` or more for large pages; `fc scrape` sends its
+`--timeout` (default 300 s). The `firecrawl` npm CLI has no such option, so a script that must not
+lose a slow page calls the API.
 TLS certificates are verified by default (upstream, 2026-11): a self-signed or untrusted HTTPS
 site now fails as an SSL error unless the request sets `"skipTlsVerification":true`.
 `onlyMainContent` also drops captcha widgets and embedded player documents.

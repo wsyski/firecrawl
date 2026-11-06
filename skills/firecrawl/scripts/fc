@@ -139,7 +139,9 @@ def scrape_body(a: argparse.Namespace) -> tuple[dict, list[str]]:
             fmt["schema"] = json.loads(a.schema)
         formats = [f for f in formats if f != "markdown"] + [fmt]
         wanted = [f for f in wanted if f != "markdown"] + ["json"]
-    body = {"url": a.target, "formats": formats, "onlyMainContent": not a.all_content}
+    # The API stops a scrape at 60 s unless the request names a timeout.
+    body = {"url": a.target, "formats": formats, "onlyMainContent": not a.all_content,
+            "timeout": a.timeout * 1000}
     if a.wait:
         body["waitFor"] = a.wait
     return body, wanted
@@ -191,7 +193,8 @@ def main() -> None:
         description=f"Self-hosted Firecrawl at {BASE} (from {BASE_ORIGIN}; "
                     "set FIRECRAWL_ENDPOINT to change it).")
     p.add_argument("--json", action="store_true", help="raw JSON response")
-    p.add_argument("--timeout", type=int, default=300, help="seconds to wait for async jobs")
+    p.add_argument("--timeout", type=int, default=300, help="seconds a scrape may take (sent as the API's timeout) "
+                   "and to wait for async jobs")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     s = sub.add_parser("scrape", help="one URL to markdown / other formats / LLM json")
@@ -232,7 +235,7 @@ def main() -> None:
 
     if a.cmd == "scrape":
         body, wanted = scrape_body(a)
-        r = call("POST", "/v2/scrape", body)
+        r = call("POST", "/v2/scrape", body, timeout=a.timeout + 15)
         if a.json:
             print(json.dumps(r, indent=2, ensure_ascii=False))
             return
