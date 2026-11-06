@@ -6,8 +6,6 @@ import {
 } from "../autumn/autumn.service";
 import { toAutumnBillingProperties, type BillingMetadata } from "./types";
 import type { Logger } from "winston";
-import { randomUUID } from "node:crypto";
-import { tallyAgentMcpCredits } from "./agent-mcp-credits";
 
 /**
  * `org_id` is the team's Autumn customer. It is nullable here and nowhere
@@ -39,14 +37,18 @@ export async function billTeam(
         ...toAutumnBillingProperties(billing),
         apiKeyId: api_key_id,
       };
-      const featureId = featureIdForBillingEndpoint(billing.endpoint);
+      const featureId = billing.hostedMcp
+        ? await autumnService.hostedMcpFeatureId(
+            team_id,
+            featureIdForBillingEndpoint(billing.endpoint),
+          )
+        : featureIdForBillingEndpoint(billing.endpoint);
 
       let trackedInRequest = false;
-      let mcpCredits = 0;
       if (org_id !== null) {
-        // Stable per-charge key (firebill route only): a caller retry or re-run
+        // Stable per-charge key: a caller retry or re-run
         // job with the same chargeId dedupes instead of double-billing.
-        const charge = {
+        trackedInRequest = await autumnService.trackCredits({
           teamId: team_id,
           orgId: org_id,
           value: credits,
@@ -56,14 +58,7 @@ export async function billTeam(
             ? `fc:track:${billing.endpoint}:${billing.chargeId}`
             : undefined,
           externalRequestId: billing.externalRequestId ?? undefined,
-        };
-        // A hosted MCP charge spends the team's MCP credits first.
-        if (billing.hostedMcp) {
-          ({ tracked: trackedInRequest, mcpCredits } =
-            await autumnService.trackHostedMcpCredits(charge));
-        } else {
-          trackedInRequest = await autumnService.trackCredits(charge);
-        }
+        });
       } else if (team_id !== "preview" && !team_id.startsWith("preview_")) {
         // Preview teams are never tracked anyway; a real team arriving without
         // an org is not expected, and its usage is about to go unmetered.
@@ -78,59 +73,22 @@ export async function billTeam(
         org_id,
         credits,
         api_key_id,
-        mcpCredits > 0 ? { ...billing, mcpCredits } : billing,
+        billing,
         false,
         trackedInRequest,
       );
 
-      // A track only happens with an org in hand; named again so the type says so.
-      // A charge the MCP credits paid part of is refundable for that part even
-      // when the rest was not tracked.
-      let refunded = false;
-      if (
-        !result.success &&
-        (trackedInRequest || mcpCredits > 0) &&
-        org_id !== null
-      ) {
-        if (await autumnService.isRoutedThroughFirebill(team_id, org_id)) {
-          // No compensating refund on the firebill route: the tracked charge
-          // is durable and correct, and a refund here poisons a retried
-          // request — its track would be deduped by Autumn against the same
-          // idempotency key (no new charge) while the ledger enqueue succeeds,
-          // leaving Autumn net-zero for billed work.
-          logger?.warn(
-            "billing enqueue failed on the firebill route; charge stands",
-            { team_id, credits, billing },
-          );
-        } else {
-          const refund = {
-            teamId: team_id,
-            orgId: org_id,
-            // Only what was charged: the rest when it was tracked, and the
-            // MCP credits part (refunded on its own below).
-            value: (trackedInRequest ? credits - mcpCredits : 0) + mcpCredits,
-            properties: autumnProperties,
-            featureId,
-            // Distinct from the track key: the refund is its own charge event.
-            idempotencyKey: billing.chargeId
-              ? `fc:refund:${billing.endpoint}:${billing.chargeId}`
-              : undefined,
-            externalRequestId: billing.externalRequestId ?? undefined,
-          };
-          // A split charge refunds each part to the balance it was tracked on.
-          await (mcpCredits > 0
-            ? autumnService.refundHostedMcpCredits({ ...refund, mcpCredits })
-            : autumnService.refundCredits(refund));
-          refunded = true;
-        }
-      }
-
-      if (!refunded) {
-        await tallyAgentMcpCredits(
+      if (!result.success && trackedInRequest) {
+        // No compensating refund: the tracked charge is durable and correct,
+        // and a refund here poisons a retried request — its track would be
+        // deduped by Autumn against the same idempotency key (no new charge)
+        // while the ledger enqueue succeeds, leaving Autumn net-zero for
+        // billed work.
+        logger?.error("billing enqueue failed after tracking; charge stands", {
+          team_id,
+          credits,
           billing,
-          billing.chargeId ?? randomUUID(),
-          mcpCredits,
-        );
+        });
       }
 
       return result;

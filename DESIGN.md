@@ -191,7 +191,7 @@ instead of failing the search.
 
 ### Per-request SearXNG category
 
-`categories` is Firecrawl's own github/research/pdf/developer/gov filter and has
+`categories` is Firecrawl's own research/pdf/developer/gov filter (`github` answers 400 since upstream removed it) and has
 nothing to do with SearXNG's categories, so there was no way to ask this
 instance for `finance` or `finance poland` — the reason the portfolio project
 kept a second SearXNG client of its own. `/v2/search` now accepts
@@ -218,7 +218,7 @@ Two consequences, both deliberate:
 
 **Not reachable from the CLI.** `firecrawl search` (the separate `firecrawl-cli`
 project; this repo carries only a link) has `--sources` and `--categories` —
-Firecrawl's own github/research/pdf filter — and no `--searxng-category`, so
+Firecrawl's own research/pdf/developer/gov filter — and no `--searxng-category`, so
 `searxngCategory` is an API-body field only. That is why the portfolio's
 `finance_news.py` still talks to SearXNG directly.
 

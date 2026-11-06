@@ -1,8 +1,5 @@
 import { v7 as uuidv7 } from "uuid";
-import {
-  AGENT_REQUEST_CREDITS_SHARDS,
-  initializeRequestCredits,
-} from "../../lib/request-credits-store";
+import { AGENT_REQUEST_CREDITS_SHARDS } from "../../lib/request-credits-store";
 import { Response } from "express";
 import {
   AgentRequest,
@@ -28,9 +25,9 @@ import {
 import { UnsafeDomainBlockedError } from "../../lib/threat-protection/error";
 import { calculateThreatScanCredits } from "../../lib/scrape-billing";
 import { billTeam } from "../../services/billing/credit_billing";
-import { agentMcpCreditsRequestId } from "../../services/billing/agent-mcp-credits";
 import { emitRejectedScrapeActivityEvents } from "../../lib/siem-logging";
 import { fetchAgentThread, threadErrorFor } from "./agent-thread";
+import { isUsOnly } from "../../lib/us-only";
 import {
   AGENT_DEFAULT_MAX_CREDITS,
   gateAgentCredits,
@@ -276,6 +273,7 @@ export async function agentController(
     }
     maxCredits = gate.maxCredits;
     stopOnInsufficientCredits = gate.stopOnInsufficientCredits;
+    if (gate.onTeamCredits) req.auth.hostedMcp = false;
   }
 
   await logRequest({
@@ -297,19 +295,6 @@ export async function agentController(
         }
       : {}),
   });
-
-  // The tally a hosted MCP run's calls add their MCP credits to, so a failed
-  // run can give that part back to MCP credits (see tallyAgentMcpCredits).
-  if (req.auth.hostedMcp) {
-    await initializeRequestCredits(
-      agentMcpCreditsRequestId(agentId),
-      AGENT_REQUEST_CREDITS_SHARDS,
-    ).catch(error =>
-      logger.error("Failed to initialize the agent run's MCP credits tally", {
-        error,
-      }),
-    );
-  }
 
   const passthrough = await fetch(
     config.EXTRACT_V3_BETA_URL + "/internal/extracts",
@@ -345,6 +330,7 @@ export async function agentController(
         ...(zeroDataRetentionMinutes !== null
           ? { zeroDataRetentionMinutes }
           : {}),
+        ...(isUsOnly(req.acuc?.flags) ? { usOnly: true } : {}),
       }),
     },
   );

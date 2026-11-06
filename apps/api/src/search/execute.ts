@@ -1,5 +1,15 @@
 import type { Logger } from "winston";
-import { discoverTools, isAlexandriaSource } from "./alexandria";
+import {
+  discoverTools,
+  isAlexandriaSource,
+  usOnlyToolsWarning,
+} from "./alexandria";
+import {
+  discoverSkills,
+  isSkillsSource,
+  SKILLS_DISCOVERY_TIMEOUT_MS,
+  type SkillDiscovery,
+} from "./skill-cards";
 import {
   AUTO_TOOLS_WAIT_MS,
   inferToolIntent,
@@ -47,6 +57,7 @@ import { checkUrlsAgainstThreatPolicy } from "../lib/threat-protection/request";
 import { calculateThreatScanCredits } from "../lib/scrape-billing";
 import { config } from "../config";
 import { logger as rootLogger } from "../lib/logger";
+import { isUsOnly } from "../lib/us-only";
 
 interface SearchOptions {
   query: string;
@@ -97,10 +108,14 @@ interface SearchContext {
 }
 
 interface SearchExecuteResult {
+  /** Parts of the search a US-only team could not be served. */
+  usOnlyWarning?: string;
   toolsWarning?: string;
   /** The tools were added automatically, not requested. */
   toolsAuto?: boolean;
   toolsUnavailable?: boolean;
+  /** Skill-card lookup returned the Exchange envelope, including an empty one. */
+  skillsDiscovered?: boolean;
   response: SearchV2Response;
   /** Which providers were tried and how each answered; lifted out of response. */
   provenance?: SearchProvenance;
@@ -133,13 +148,32 @@ export async function executeSearch(
   } = context;
 
   const num_results_buffer = Math.floor(limit * 2);
+  const usOnly = isUsOnly(flags);
+  const usOnlyWarnings: string[] = [];
 
   logger.info("Searching for results");
 
   const wantsTools = sources.some(isAlexandriaSource);
+  const wantsSkills = sources.some(isSkillsSource);
   const toolsAllowed =
     !zeroDataRetention &&
     !options.enterprise?.some(mode => mode === "zdr" || mode === "anon");
+  const missedSkills: SkillDiscovery = { skills: [], succeeded: false };
+  const skillsPromise =
+    toolsAllowed && wantsSkills && query.trim()
+      ? discoverSkills(
+          {
+            teamId,
+            query,
+            timeoutMs: Math.min(options.timeout, SKILLS_DISCOVERY_TIMEOUT_MS),
+            usOnly,
+          },
+          logger,
+        ).catch(error => {
+          logger.warn("Skill discovery failed", { error });
+          return missedSkills;
+        })
+      : null;
   const toolIntent =
     toolsAllowed &&
     (wantsTools ? options.inferToolQuery : options.autoTools) &&
@@ -156,6 +190,7 @@ export async function executeSearch(
               toolDetail: options.toolDetail ?? "compact",
               teamId,
               connectors: flags?.exchangeRetrieve === true,
+              usOnly,
               limit,
               queries: wantsTools
                 ? intent.toolQueries
@@ -168,7 +203,10 @@ export async function executeSearch(
             },
             logger,
           );
-          return verifyTools(query, found.items, logger);
+          return {
+            items: await verifyTools(query, found.items, logger),
+            usOnlyExcluded: found.usOnlyExcluded ?? 0,
+          };
         })
         .catch(() => null)
     : null;
@@ -180,6 +218,7 @@ export async function executeSearch(
             toolDetail: options.toolDetail ?? "compact",
             teamId,
             connectors: flags?.exchangeRetrieve === true,
+            usOnly,
             limit,
             queries: wantsTools ? [query] : undefined,
             urls:
@@ -196,7 +235,9 @@ export async function executeSearch(
   const searchTypes = [
     ...new Set(
       sources
-        .filter(source => !isAlexandriaSource(source))
+        .filter(
+          source => !isAlexandriaSource(source) && !isSkillsSource(source),
+        )
         .map(source => source.type as SearchResultType),
     ),
   ];
@@ -231,13 +272,15 @@ export async function executeSearch(
             options.enterprise?.some(
               mode => mode === "zdr" || mode === "anon",
             ) === true,
+          ...(usOnly ? { usOnly, warnings: usOnlyWarnings } : {}),
         },
         logger,
       )
     : null;
 
   const searchResponse =
-    (wantsTools && !searchTypes.length) || indexResultsPromise !== null
+    ((wantsTools || wantsSkills) && !searchTypes.length) ||
+    indexResultsPromise !== null
       ? ({} as SearchV2Response)
       : ((await search({
           query: searchQuery,
@@ -263,6 +306,7 @@ export async function executeSearch(
             ...operators.excludedSites.filter(site => !site.includes("/")),
           ]),
           searxngCategory: options.searxngCategory,
+          usOnly,
         })) as SearchV2Response);
   // Provenance is about the request, not about a result group: take it off the
   // payload so counting, scraping, logging and the client's `data` are unchanged.
@@ -429,7 +473,7 @@ export async function executeSearch(
         tool,
       ]),
     );
-    for (const tool of extra ?? []) {
+    for (const tool of extra?.items ?? []) {
       const key = `${tool.provider}/${tool.capability}`;
       const previous = merged.get(key);
       merged.set(
@@ -454,13 +498,27 @@ export async function executeSearch(
       );
     }
     searchResponse.tools = [...merged.values()];
-    toolsWarning = discovery.warning;
-    toolsUnavailable = discovery.unavailable === true && !extra?.length;
+    // Both legs can hide the same tools, so the larger count is reported.
+    const usOnlyExcluded = Math.max(
+      discovery.usOnlyExcluded ?? 0,
+      extra?.usOnlyExcluded ?? 0,
+    );
+    toolsWarning =
+      [
+        discovery.warning,
+        usOnlyExcluded > 0 ? usOnlyToolsWarning(usOnlyExcluded) : undefined,
+      ]
+        .filter(Boolean)
+        .join(" ") || undefined;
+    toolsUnavailable = discovery.unavailable === true && !extra?.items.length;
   } else if (extraDiscovery) {
     const extra = await waitForExtra();
-    if (extra?.length) {
-      searchResponse.tools = extra;
+    if (extra?.items.length) {
+      searchResponse.tools = extra.items;
       toolsAuto = true;
+    }
+    if (extra?.usOnlyExcluded) {
+      toolsWarning = usOnlyToolsWarning(extra.usOnlyExcluded);
     }
   }
 
@@ -581,6 +639,13 @@ export async function executeSearch(
     }));
   }
 
+  let skillsDiscovered = false;
+  if (skillsPromise) {
+    const found = await skillsPromise;
+    searchResponse.skills = found.skills;
+    skillsDiscovered = found.succeeded;
+  }
+
   const scrapeFormats = scrapeOptions?.formats
     ? scrapeOptions.formats.map((f: any) =>
         typeof f === "string" ? f : f.type,
@@ -622,9 +687,13 @@ export async function executeSearch(
   return {
     response: searchResponse,
     ...(provenance ? { provenance } : {}),
+    ...(usOnlyWarnings.length > 0
+      ? { usOnlyWarning: usOnlyWarnings.join(" ") }
+      : {}),
     toolsWarning,
     toolsUnavailable,
     toolsAuto,
+    skillsDiscovered,
     totalResultsCount,
     // Counted from the final response — after scraping and highlights — so it
     // matches exactly what the client can address by position.

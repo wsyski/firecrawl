@@ -2,8 +2,9 @@ import type { Response } from "express";
 
 const mocks = vi.hoisted(() => ({
   checkCredits: vi.fn(),
-  mcpCreditsAvailable: vi.fn(),
   markHostedMcp: vi.fn(),
+  clearHostedMcp: vi.fn(),
+  markUsedPrompt: vi.fn(),
   cameFromHostedMcp: vi.fn(),
   usedPrompt: vi.fn(),
   settleOnce: vi.fn(),
@@ -29,8 +30,9 @@ vi.mock("../../../lib/logger", () => {
 vi.mock("../../../services/autumn/autumn.service", () => ({
   autumnService: {
     checkCredits: mocks.checkCredits,
-    mcpCreditsAvailable: mocks.mcpCreditsAvailable,
+    hostedMcpFeatureId: async () => "MCP_CREDITS",
   },
+  CREDITS_FEATURE_ID: "CREDITS",
   DEFAULT_TEAM_LIMITS: { concurrency_limit: 2 },
 }));
 
@@ -81,8 +83,9 @@ vi.mock("../../../lib/browser-sessions", () => ({
   ),
   listUnsettledHangarSessions: vi.fn(),
   didBrowserSessionUsePrompt: mocks.usedPrompt,
-  markBrowserSessionUsedPrompt: vi.fn(),
+  markBrowserSessionUsedPrompt: mocks.markUsedPrompt,
   markBrowserSessionHostedMcp: mocks.markHostedMcp,
+  clearBrowserSessionHostedMcp: mocks.clearHostedMcp,
   didBrowserSessionComeFromHostedMcp: mocks.cameFromHostedMcp,
   upsertBrowserProfile: vi.fn(),
   deleteBrowserProfile: vi.fn(),
@@ -175,8 +178,8 @@ const session = {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.checkCredits.mockResolvedValue({ allowed: true, remaining: 1000 });
-  mocks.mcpCreditsAvailable.mockResolvedValue(0);
   mocks.markHostedMcp.mockResolvedValue(undefined);
+  mocks.clearHostedMcp.mockResolvedValue(undefined);
   mocks.cameFromHostedMcp.mockResolvedValue(false);
   mocks.usedPrompt.mockResolvedValue(false);
   mocks.billTeam.mockResolvedValue({ success: true });
@@ -185,50 +188,48 @@ beforeEach(() => {
 });
 
 describe("browser sessions from hosted MCP calls", () => {
-  it("lets MCP credits pay for a session the balance alone refuses", async () => {
-    mocks.checkCredits.mockResolvedValue({ allowed: false, remaining: 5 });
-    mocks.mcpCreditsAvailable.mockResolvedValue(15);
-
+  it("checks MCP credits for a hosted session and marks it hosted", async () => {
     const res = await create(true);
     expect(res.statusCode).toBe(200);
-    expect(mocks.mcpCreditsAvailable).toHaveBeenCalledWith(
-      expect.objectContaining({ teamId: TEAM_ID, orgId: "org-1", value: 20 }),
+    expect(mocks.checkCredits).toHaveBeenCalledWith(
+      expect.objectContaining({
+        teamId: TEAM_ID,
+        orgId: "org-1",
+        value: 20,
+        featureId: "MCP_CREDITS",
+      }),
     );
     expect(mocks.markHostedMcp).toHaveBeenCalledWith(res.body.id);
   });
 
-  it("refuses a session the balance and MCP credits cannot cover together", async () => {
+  it("refuses a hosted session the MCP credits check refuses", async () => {
     mocks.checkCredits.mockResolvedValue({ allowed: false, remaining: 5 });
-    mocks.mcpCreditsAvailable.mockResolvedValue(14);
 
     expect((await create(true)).statusCode).toBe(402);
     expect(mocks.markHostedMcp).not.toHaveBeenCalled();
   });
 
-  it("counts MCP credits alone when a spend limit refused with balance left", async () => {
-    mocks.checkCredits.mockResolvedValue({ allowed: false, remaining: 500 });
-    mocks.mcpCreditsAvailable.mockResolvedValue(19);
-    expect((await create(true)).statusCode).toBe(402);
+  it("bills a hosted session MCP credits can't cover on the team's credits", async () => {
+    mocks.checkCredits
+      .mockResolvedValueOnce({ allowed: false, remaining: 0 })
+      .mockResolvedValueOnce({ allowed: true, remaining: 1000 });
 
-    mocks.mcpCreditsAvailable.mockResolvedValue(20);
     expect((await create(true)).statusCode).toBe(200);
-  });
-
-  it("marks a hosted session even when the balance covers it", async () => {
-    const res = await create(true);
-    expect(res.statusCode).toBe(200);
-    expect(mocks.mcpCreditsAvailable).not.toHaveBeenCalled();
-    expect(mocks.markHostedMcp).toHaveBeenCalledWith(res.body.id);
+    expect(mocks.checkCredits).toHaveBeenLastCalledWith(
+      expect.objectContaining({ featureId: "CREDITS" }),
+    );
+    expect(mocks.markHostedMcp).not.toHaveBeenCalled();
   });
 
   it("leaves a session not from the hosted MCP as it was", async () => {
     mocks.checkCredits.mockResolvedValue({ allowed: false, remaining: 5 });
-    mocks.mcpCreditsAvailable.mockResolvedValue(1000);
     expect((await create(false)).statusCode).toBe(402);
 
     mocks.checkCredits.mockResolvedValue({ allowed: true, remaining: 1000 });
     expect((await create(false)).statusCode).toBe(200);
-    expect(mocks.mcpCreditsAvailable).not.toHaveBeenCalled();
+    for (const [check] of mocks.checkCredits.mock.calls) {
+      expect(check.featureId).toBeUndefined();
+    }
     expect(mocks.markHostedMcp).not.toHaveBeenCalled();
   });
 
@@ -237,21 +238,15 @@ describe("browser sessions from hosted MCP calls", () => {
     expect((await create(true)).statusCode).toBe(200);
   });
 
-  it("lets MCP credits pay for a prompt the balance alone refuses", async () => {
+  it("checks MCP credits for a hosted prompt", async () => {
+    await reserveBrowserPromptCredits(makeReq(true) as any, session);
+    expect(mocks.checkCredits).toHaveBeenLastCalledWith(
+      expect.objectContaining({ value: 70, featureId: "MCP_CREDITS" }),
+    );
+
     mocks.checkCredits.mockResolvedValue({ allowed: false, remaining: 0 });
-    mocks.mcpCreditsAvailable.mockResolvedValue(70);
     await expect(
       reserveBrowserPromptCredits(makeReq(true) as any, session),
-    ).resolves.toBeUndefined();
-
-    expect(mocks.markHostedMcp).toHaveBeenCalledWith("session-1");
-
-    mocks.mcpCreditsAvailable.mockResolvedValue(69);
-    await expect(
-      reserveBrowserPromptCredits(makeReq(true) as any, session),
-    ).rejects.toMatchObject({ status: 402 });
-    await expect(
-      reserveBrowserPromptCredits(makeReq(false) as any, session),
     ).rejects.toMatchObject({ status: 402 });
   });
 
@@ -262,6 +257,28 @@ describe("browser sessions from hosted MCP calls", () => {
     mocks.markHostedMcp.mockClear();
     await reserveBrowserPromptCredits(makeReq(false) as any, session);
     expect(mocks.markHostedMcp).not.toHaveBeenCalled();
+  });
+
+  it("bills the session on team credits when a hosted prompt falls back to them", async () => {
+    mocks.checkCredits
+      .mockResolvedValueOnce({ allowed: false, remaining: 0 })
+      .mockResolvedValueOnce({ allowed: true, remaining: 1000 });
+
+    await reserveBrowserPromptCredits(makeReq(true) as any, session);
+    expect(mocks.markHostedMcp).not.toHaveBeenCalled();
+    expect(mocks.clearHostedMcp).toHaveBeenCalledWith("session-1");
+  });
+
+  it("refuses a team-credit prompt whose session can't be moved off MCP credits", async () => {
+    mocks.checkCredits
+      .mockResolvedValueOnce({ allowed: false, remaining: 0 })
+      .mockResolvedValueOnce({ allowed: true, remaining: 1000 });
+    mocks.clearHostedMcp.mockRejectedValue(new Error("redis down"));
+
+    await expect(
+      reserveBrowserPromptCredits(makeReq(true) as any, session),
+    ).rejects.toThrow("redis down");
+    expect(mocks.markUsedPrompt).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -288,50 +305,4 @@ describe("browser sessions from hosted MCP calls", () => {
       });
     },
   );
-
-  it("finishes billing a hosted agent session before settlement returns", async () => {
-    mocks.cameFromHostedMcp.mockResolvedValue(true);
-    let billed = false;
-    let billedBeforeTally = false;
-    mocks.billTeam.mockImplementation(async () => {
-      await new Promise(resolve => setTimeout(resolve, 20));
-      billed = true;
-      return { success: true };
-    });
-    mocks.recordRequestCredits.mockImplementation(async () => {
-      billedBeforeTally = billed;
-      return true;
-    });
-    mocks.settleOnce.mockResolvedValue({
-      creditsBilled: 10,
-      newlySettled: true,
-    });
-    await settleBrowserSession({ ...session, request_id: "agent-run" }, {
-      status: "stopped",
-      created_at: 1000,
-      ended_at: 1300,
-    } as any);
-    expect(billed).toBe(true);
-    expect(billedBeforeTally).toBe(true);
-  });
-
-  it("names the agent run on an agent session's charge", async () => {
-    mocks.cameFromHostedMcp.mockResolvedValue(true);
-    mocks.settleOnce.mockResolvedValue({
-      creditsBilled: 10,
-      newlySettled: true,
-    });
-    await settleBrowserSession({ ...session, request_id: "agent-run" }, {
-      status: "stopped",
-      created_at: 1000,
-      ended_at: 1300,
-    } as any);
-    expect(mocks.billTeam).toHaveBeenCalledWith(TEAM_ID, "org-1", 10, null, {
-      endpoint: "agent",
-      jobId: "agent-run",
-      chargeId: "session-1:destroy",
-      agentRequestId: "agent-run",
-      hostedMcp: true,
-    });
-  });
 });

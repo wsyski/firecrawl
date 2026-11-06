@@ -372,11 +372,7 @@ export async function parseController(
         (req.body.zeroDataRetention ?? false);
       const billing: BillingMetadata = {
         ...(req.body.__agentInterop
-          ? {
-              endpoint: "agent" as const,
-              jobId,
-              agentRequestId: req.body.__agentInterop.requestId,
-            }
+          ? { endpoint: "agent" as const, jobId }
           : { endpoint: "parse" as const, jobId }),
         externalRequestId: externalRequestId(req),
         hostedMcp: req.auth.hostedMcp,
@@ -650,6 +646,17 @@ export async function parseController(
               "parse.status_code": 400,
             });
             return res.status(400).json({
+              success: false,
+              code: e.code,
+              error: e.message,
+            });
+          }
+
+          if (e.code === "US_ONLY_UNAVAILABLE") {
+            setSpanAttributes(span, {
+              "parse.status_code": 403,
+            });
+            return res.status(403).json({
               success: false,
               code: e.code,
               error: e.message,

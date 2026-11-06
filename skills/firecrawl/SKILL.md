@@ -51,7 +51,8 @@ fc parse document.pdf
   DEFAULT search, so the rows are from engines nobody asked for), and `sii`'s count of the rows its
   relevance filter removed. Silence there means the answer is what you asked for.
 - `--searxng-category` is the instance's own category (`finance poland`, `science`, comma-separated
-  for several). Not `--categories`, which is Firecrawl's github/research/pdf filter.
+  for several). Not `--categories`, which is Firecrawl's research/pdf/developer/gov filter
+  (`github` was removed upstream and now answers HTTP 400; use `developer` or `includeDomains`).
 - Other options: `--wait MS`, `--all-content` (keep nav and footer), `--json` (raw response,
   goes before the command), `--timeout S`, and `FIRECRAWL_ENDPOINT` to override the endpoint
   (`FIRECRAWL_API_URL` still works, where it survives the scrub).
@@ -70,6 +71,9 @@ curl -s $FC/v2/scrape -H 'Content-Type: application/json' \
 
 Formats: `markdown` (default), `html`, `rawHtml`, `links`. Options: `onlyMainContent`,
 `waitFor` (ms, for JS pages; Liferay Learn search needs `6000`). PDF URLs work and add `numPages`.
+TLS certificates are verified by default (upstream, 2026-11): a self-signed or untrusted HTTPS
+site now fails as an SSL error unless the request sets `"skipTlsVerification":true`.
+`onlyMainContent` also drops captcha widgets and embedded player documents.
 
 ### Structured data and summaries (local LLM, 5–10 s)
 
@@ -96,8 +100,8 @@ curl -s $FC/v2/search -H 'Content-Type: application/json' \
 
 - `sources`: `web`, `news`, `images` → `.data.web`, `.data.news`, `.data.images`. This is the default
   SearXNG category selector: `news` → `SEARXNG_NEWS_CATEGORIES`, `images` → `images`, web →
-  `SEARXNG_CATEGORIES` (`general`). `--categories` is Firecrawl's own github/research/pdf filter,
-  **not** a SearXNG category.
+  `SEARXNG_CATEGORIES` (`general`). `--categories` is Firecrawl's own research/pdf/developer/gov filter,
+  **not** a SearXNG category; `github` answers HTTP 400 since the 2026-11-06 upstream merge.
 - `"searxngCategory":"finance"` picks a SearXNG category per request — any name the instance knows
   (`finance`, `finance poland`, `science`, `q&a`, comma-separated for several). It overrides the
   category every requested source maps to, and suppresses the DuckDuckGo fallback, which cannot

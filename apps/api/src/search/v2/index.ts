@@ -4,6 +4,7 @@ import { fire_engine_search_v2 } from "./fireEngine-v2";
 import { searxng_search } from "./searxng";
 import { ddgSearch } from "./ddgsearch";
 import { Logger } from "winston";
+import { UsOnlyUnavailableError } from "../../scraper/scrapeURL/error";
 import {
   SearchProvenance,
   SearchProviderAttempt,
@@ -33,6 +34,7 @@ export async function search({
   includeDomains = undefined,
   excludeDomains = undefined,
   searxngCategory = undefined,
+  usOnly = false,
 }: {
   query: string;
   logger: Logger;
@@ -53,7 +55,14 @@ export async function search({
   includeDomains?: string[];
   excludeDomains?: string[];
   searxngCategory?: string;
+  usOnly?: boolean;
 }): Promise<SearchV2Response> {
+  // The fallback backends below take no US-only routing.
+  if (usOnly && !config.FIRE_ENGINE_BETA_URL) {
+    throw new UsOnlyUnavailableError(
+      "Search is not available for teams restricted to US-only processing on this deployment.",
+    );
+  }
   // Every provider below used to return early or fall through silently, so an
   // empty response could mean "nothing matched", "the provider errored" or
   // "a different provider answered". Each attempt is recorded instead.
@@ -88,6 +97,7 @@ export async function search({
         enterprise,
         includeDomains,
         excludeDomains,
+        usOnly,
       });
 
       attempts.push({

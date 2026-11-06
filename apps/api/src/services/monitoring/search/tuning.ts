@@ -1,6 +1,7 @@
 import type { GoogleLanguageModelOptions } from "@ai-sdk/google";
 import { getModel } from "../../../lib/generic-ai";
 import { config } from "../../../config";
+import type { TeamFlags } from "../../../controllers/v2/types";
 
 // Vertex billing labels so every LLM call is traceable at the billing level by
 // function, team, monitor, and monitor check (mirrors the Extract code). The
@@ -55,10 +56,13 @@ export function hasLlmProvider(): boolean {
   return hasVertex() || Boolean(geminiApiKey()) || defaultProviderAvailable();
 }
 
-export function googleModel(modelId: string) {
-  if (hasVertex()) return getModel(modelId, "vertex");
-  if (geminiApiKey()) return getModel(modelId, "google");
-  return getModel(modelId);
+export function googleModel(
+  modelId: string,
+  options?: { teamFlags?: TeamFlags | null; feature?: string },
+) {
+  if (hasVertex()) return getModel(modelId, "vertex", options);
+  if (geminiApiKey()) return getModel(modelId, "google", options);
+  return getModel(modelId, undefined, options);
 }
 
 export function googleProviderOptions(

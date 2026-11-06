@@ -21,7 +21,7 @@
 set -euo pipefail
 
 SKILL_HUB="${SKILL_HUB:-$HOME/.agents/skills}"
-BACKUP_ROOT="${DEPLOY_BACKUP_ROOT:-/opt/backup/agents}"
+BACKUP_ROOT="${DEPLOY_BACKUP_ROOT:-/opt/ext/backup/agents}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(dirname "$HERE")"
 SKILLS="$REPO/skills"
@@ -43,7 +43,7 @@ Every skills/<name>/ that holds a SKILL.md is mirrored, found by glob rather tha
 a new skill needs no edit here. The hub is ${SKILL_HUB:-$HOME/.agents/skills}; SKILL_HUB
 overrides it (the make targets use that to test against a scratch directory).
 
-A live hub copy is parked under ${DEPLOY_BACKUP_ROOT:-/opt/backup/agents}/<timestamp>-<repo>-skills/
+A live hub copy is parked under ${DEPLOY_BACKUP_ROOT:-/opt/ext/backup/agents}/<timestamp>-<repo>-skills/
 before it is replaced, keeping its relative layout. A first deploy has nothing to back up.
 
 Exit: 0 dry run printed, deployed, or no drift; 1 drift under --check or a failed copy;

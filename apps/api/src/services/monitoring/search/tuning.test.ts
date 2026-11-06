@@ -83,13 +83,21 @@ describe("googleModel", () => {
   it("uses Vertex when its credentials are configured", () => {
     mocks.config.VERTEX_CREDENTIALS = "{}";
     googleModel("gemini-3.5-flash");
-    expect(mocks.getModel).toHaveBeenCalledWith("gemini-3.5-flash", "vertex");
+    expect(mocks.getModel).toHaveBeenCalledWith(
+      "gemini-3.5-flash",
+      "vertex",
+      undefined,
+    );
   });
 
   it("uses the GenAI provider when only a Gemini key is configured", () => {
     process.env.GOOGLE_GENERATIVE_AI_API_KEY = "g-key";
     googleModel("gemini-3.5-flash");
-    expect(mocks.getModel).toHaveBeenCalledWith("gemini-3.5-flash", "google");
+    expect(mocks.getModel).toHaveBeenCalledWith(
+      "gemini-3.5-flash",
+      "google",
+      undefined,
+    );
   });
 
   it("falls back to the default provider when neither is configured", () => {
@@ -97,14 +105,22 @@ describe("googleModel", () => {
     googleModel("gemini-3.5-flash");
     // No second argument: getModel then honours MODEL_NAME + OPENAI_BASE_URL,
     // which is how a self-hosted deployment routes every other LLM call.
-    expect(mocks.getModel).toHaveBeenCalledWith("gemini-3.5-flash");
+    expect(mocks.getModel).toHaveBeenCalledWith(
+      "gemini-3.5-flash",
+      undefined,
+      undefined,
+    );
   });
 
   it("prefers Vertex over a Gemini key", () => {
     mocks.config.VERTEX_CREDENTIALS = "{}";
     process.env.GOOGLE_GENERATIVE_AI_API_KEY = "g-key";
     googleModel("gemini-3.5-flash");
-    expect(mocks.getModel).toHaveBeenCalledWith("gemini-3.5-flash", "vertex");
+    expect(mocks.getModel).toHaveBeenCalledWith(
+      "gemini-3.5-flash",
+      "vertex",
+      undefined,
+    );
   });
 });
 

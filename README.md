@@ -230,7 +230,7 @@ currency engine here.
 and web → `SEARXNG_CATEGORIES` (empty means the instance default). **`searxngCategory` overrides all
 three per request** (2026-10-30): a comma-separated list of the instance's own category names, which
 also clears the `SEARXNG_ENGINES` pin and suppresses the DuckDuckGo fallback, since DDG cannot serve
-a category. `--categories` remains Firecrawl's own github/research/pdf filter and has nothing to do
+a category. `--categories` remains Firecrawl's own research/pdf/developer/gov filter and has nothing to do
 with it.
 
 ```bash
