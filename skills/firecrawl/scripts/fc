@@ -144,6 +144,8 @@ def scrape_body(a: argparse.Namespace) -> tuple[dict, list[str]]:
             "timeout": a.timeout * 1000}
     if a.wait:
         body["waitFor"] = a.wait
+    if a.max_age is not None:
+        body["maxAge"] = a.max_age
     return body, wanted
 
 
@@ -204,6 +206,8 @@ def main() -> None:
     s.add_argument("--all-content", action="store_true", help="keep nav/footer (onlyMainContent off)")
     s.add_argument("--prompt", help="LLM json extraction prompt")
     s.add_argument("--schema", help="JSON schema string for LLM extraction")
+    s.add_argument("--max-age", dest="max_age", type=int,
+                   help="ms: serve a cached copy this fresh instead of re-scraping")
 
     q = sub.add_parser("search", help="web/news/images search via SearXNG")
     q.add_argument("query")

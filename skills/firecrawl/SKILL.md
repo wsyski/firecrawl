@@ -53,7 +53,8 @@ fc parse document.pdf
 - `--searxng-category` is the instance's own category (`finance poland`, `science`, comma-separated
   for several). Not `--categories`, which is Firecrawl's research/pdf/developer/gov filter
   (`github` was removed upstream and now answers HTTP 400; use `developer` or `includeDomains`).
-- Other options: `--wait MS`, `--all-content` (keep nav and footer), `--json` (raw response,
+- Other options: `--wait MS`, `--all-content` (keep nav and footer), `--max-age MS` (scrape: accept
+  a cached copy that fresh), `--json` (raw response,
   goes before the command), `--timeout S` (a scrape's own limit, sent to the API, and the wait for
   async jobs), and `FIRECRAWL_ENDPOINT` to override the endpoint
   (`FIRECRAWL_API_URL` still works, where it survives the scrub).
