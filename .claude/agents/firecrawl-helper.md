@@ -12,7 +12,7 @@ You are a specialist for the local Firecrawl Docker Compose stack running in thi
 
 - API is reachable at `http://localhost:3002` (or `$PORT` from `.env` if overridden).
 - LLM backend is llama-swap at `OPENAI_BASE_URL` in `.env` (currently `http://192.168.1.100:8081/v1`). It has `apiKeys`: every call needs `Authorization: Bearer $OPENAI_API_KEY`, or it answers 401. This IP is on a static DHCP reservation but re-check `.env` if connectivity fails.
-- `MODEL_NAME=default` is a llama-swap `warm` selector (`/opt/llm/llama-swap/config.yaml`): it uses whatever model is already running and loads `swift15-27b` only when none is. Firecrawl never picks or rewrites the model itself.
+- `MODEL_NAME=current` is a llama-swap `warm` selector (`/opt/llm/llama-swap/config.yaml`): it uses whatever model is already running and loads its first target (`qwen38-flash-next`) only when none is. Do not point it at llama-swap's own `default` selector — that one is `strategy: pin` and forces the boot model. Firecrawl never picks or rewrites the model itself.
 - llama-swap's log (proxy + llama-server output): `journalctl -u llama-swap -o cat` on the host, or `curl -s -H "Authorization: Bearer $KEY" http://192.168.1.100:8081/logs`.
 - `LOGGING_LEVEL=info` is set in `.env` — API container logs are not debug-noisy by default.
 - `/v1/extract` is deprecated upstream in favor of `/v2/scrape` — mention this if a task uses `/v1/extract`.
@@ -45,7 +45,7 @@ Mirrors the Hermes `firecrawl-helper` skill's wrapper
 docker compose ps
 curl -s -o /dev/null -w '%{http_code}\n' http://localhost:3002/v0/health/liveness
 KEY=$(grep '^OPENAI_API_KEY=' .env | cut -d= -f2-)
-curl -s -H "Authorization: Bearer $KEY" http://192.168.1.100:8081/running   # llama-swap up; which model is loaded (empty: `default` loads swift15-27b on first request)
+curl -s -H "Authorization: Bearer $KEY" http://192.168.1.100:8081/running   # llama-swap up; which model is loaded (empty: `current` loads its first target on first request)
 ```
 
 All 6 services (`api`, `playwright-service`, `redis`, `rabbitmq`, `nuq-postgres`, `foundationdb`) should show `Up`/`running`; liveness should return `200`.

@@ -3,7 +3,6 @@ import type { ThirdPartyDataTermsRequiredError } from "../../lib/exchange";
 import { Request, Response } from "express";
 import { hasCategory } from "../../lib/search-query-builder";
 import { config } from "../../config";
-import { isRequestedModelSupported } from "../../lib/extraction-provider";
 import { z } from "zod";
 import { browserProfileNameSchema } from "../../lib/browser-profiles";
 import { protocolIncluded, checkUrl } from "../../lib/validateUrl";
@@ -367,14 +366,6 @@ const jsonFormatWithOptions = z.strictObject({
     })
     .superRefine(addStrictSchemaIssue),
   prompt: z.string().max(10000).optional(),
-  // Optional: name a configured extraction model for this request.
-  model: z
-    .string()
-    .max(100)
-    .optional()
-    .refine(val => val === undefined || isRequestedModelSupported(val), {
-      message: "Unsupported extraction model.",
-    }),
   // Deprecated: lifted into the top-level checkPromptInjection at parse time.
   checkPromptInjection: z.boolean().optional(),
 });
@@ -1666,6 +1657,7 @@ export type ErrorResponse = {
   login_url?: string;
   replacement?: string;
   documentation_url?: string;
+  retry_after_seconds?: number;
 };
 
 export type ScrapeResponse =
@@ -2143,6 +2135,7 @@ export const LOCKDOWN_DEFAULT_MAX_AGE_MS = 2 * 365 * 24 * 60 * 60 * 1000;
 export type TeamFlags = {
   exchangeRetrieve?: boolean;
   alexandriaAutoTools?: boolean;
+  alexandriaToolFusion?: boolean;
   ignoreRobots?: "disabled" | "allowed" | "forced";
   customRobotsAgent?: "disabled" | "allowed";
   threatProtection?: "disabled" | "allowed" | "forced";
@@ -2196,6 +2189,12 @@ export type TeamFlags = {
   // Every request is processed by US-based vendors only. A route with no US
   // vendor is refused or skipped with a warning.
   usOnly?: boolean;
+  // PDF and image parsing runs only on reserved processing capacity. A parse
+  // that cannot be kept there is refused.
+  reservedCapacity?: boolean;
+  // Per-team extensions past a deprecation's sunset (lib/deprecations.ts):
+  // surface or entry key to the YYYY-MM-DD or UTC timestamp it runs until.
+  deprecationExtensions?: Record<string, string>;
   organizationDataSourceAccess?: Record<
     string,
     {

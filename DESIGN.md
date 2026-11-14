@@ -19,6 +19,34 @@ Firecrawl is a web scraper API. The directory is a monorepo:
 
 **Gating.** Snips run under several configurations, so a test that needs an external service is gated with `describeIf`/`itIf`/`concurrentIf` and the constants from `src/__tests__/snips/lib.ts` (`TEST_PRODUCTION`, `HAS_AI`, `HAS_FIRE_ENGINE`, ...). Reading `process.env` directly in a test bypasses that and is wrong.
 
+### Running the unit layer
+
+`bin/unit-tests.sh` runs the whole unit layer in one command: every `src/**/*.test.ts` except the snips, except
+the legacy `src/__tests__/e2e*/**` (both need the live stack), and except `src/__tests__/nuq-fdb/**` when
+`libfdb_c.so` cannot be loaded — those files import the FoundationDB binding, so they error at import instead of
+self-skipping on `config.FDB_CLUSTER_FILE`. Vitest is called through its pinned binary, for the `pnpm exec`
+reason below.
+
+Two prerequisites, both taken from CI's own job (`test-server.yml` gives the job a redis service and dpkgs the
+FoundationDB client). The script starts the first when needed and points at the second:
+
+- **redis** on `127.0.0.1:6379`: started as a throwaway `redis:alpine` container if nothing listens there, and
+  removed on exit. The Compose `redis` publishes no host port, so the running stack is not a substitute. Set
+  `REDIS_URL` to use a reachable one instead.
+- **`libfdb_c.so`**: `FDB_CLIENT_DIR` (default `/opt/ext/fdb-clients/usr/lib`) is prepended to `LD_LIBRARY_PATH`
+  when it holds the library. Rootless, no `.deb` install: `curl` the same release CI uses
+  (foundationdb-clients 7.3.63) and `dpkg-deb -x` it into that directory.
+
+Measured after the upstream merge of 2026-11-14: 326 files pass, 8 skip, 12 fail (69 tests). All 12 are
+byte-identical to `upstream/main` and appear in no CI workflow — CI runs curated file lists, never this layer.
+`src/scraper/scrapeURL/scrapeURL.test.ts` alone is 49 of the 69: it drives fire-engine, the cloud scraper this
+fork has no access to, and is not gated with `describeIf(HAS_FIRE_ENGINE)`. The rest contradict upstream's own
+current code (`rewriteUrl.test.ts` expects `export?format=pdf` while `rewriteUrl.ts` has returned `format=html`
+since upstream `dca920257`; `html-to-markdown.test.ts` expects `- ` list bullets where the Go converter emits
+`*   `; `crawl-redis.test.ts` expects 16 permutations and the code makes 12) or want a service CI supplies
+(`ranker.test.ts` needs a real `OPENAI_API_KEY` for embeddings). Treat them as upstream's, not this fork's:
+fixing them is an upstream contribution, not fork maintenance.
+
 ### Running one snip against an already-running stack
 
 Useful against the Docker Compose deployment, and the fallback when the harness cannot run. `apps/api` does not read the repo-root `.env`, so the environment has to be sourced explicitly:
@@ -35,7 +63,7 @@ cd apps/api && set -a && . ../../.env && set +a && \
 
 ## Local LLM model selection
 
-Firecrawl does not pick the local model; llama-swap does. `MODEL_NAME=default` names a llama-swap selector with the `warm` strategy (llama-swap v241+, declared in llama-swap's `config.yaml`): per request it serves a `ready` target, else a `starting` one, else loads `targets[0]` (`swift15-27b`). So a scrape adopts whatever model another client already has loaded, and the choice is made atomically inside llama-swap rather than by a Firecrawl-side probe that can go stale between the check and the request.
+Firecrawl does not pick the local model; llama-swap does. `MODEL_NAME=current` names a llama-swap selector with the `warm` strategy (llama-swap v241+, declared in llama-swap's `config.yaml`): per request it serves a `ready` target, else a `starting` one, else loads `targets[0]` (`qwen38-flash-next`). So a scrape adopts whatever model another client already has loaded, and the choice is made atomically inside llama-swap rather than by a Firecrawl-side probe that can go stale between the check and the request. llama-swap also declares a `default` selector, but that one is `strategy: pin` (always the boot model) — it is not what Firecrawl asks for.
 
 `src/lib/local-model.ts` exports `localModelFetch`, installed as the OpenAI provider's `fetch` option only when `isLocalLlmUrl(OPENAI_BASE_URL)` (loopback, private/Tailscale IP, single-label or `*.local`/`*.lan`/`*.internal` host). It never touches `model`; it adds llama.cpp fields to chat bodies (`LLM_DISABLE_THINKING`, `LLM_SLOT_ID`) and enforces the `LLM_LOCK_FILE` kill switch. A cloud `OPENAI_BASE_URL` gets plain `fetch`, so requests go out exactly as the SDK builds them. Covered by `src/lib/local-model.test.ts`.
 
@@ -314,7 +342,19 @@ node node_modules/knip/bin/knip.js --cache
 
 Do not "fix" this by bumping pnpm: 11.4.0 (the upstream pin) and 12.10.1 fail identically on the
 `foundationdb` build, and a bump rewrites `apps/api/package.json` plus ~158 lines of pnpm-self entries in the
-lockfile. Set `NUQ_BACKEND=pg` (the default) so nothing needs the FDB client.
+lockfile. Set `NUQ_BACKEND=pg` (the default) so nothing needs the FDB client. The abort is not only cosmetic:
+it also leaves `koffi` (the FFI loader `src/lib/html-to-markdown.ts` uses) half-built — its `build/koffi/linux_x64/koffi.node`
+is there but `require("koffi")` throws `Cannot find the native Koffi module; did you bundle it correctly?`. Finish
+that build once, or every suite that reaches `html-to-markdown.ts` (most of `src/scraper/scrapeURL/**`, several
+`src/controllers/v2/__tests__/` and `src/__tests__/routes/` files) fails at import:
+
+```bash
+cd apps/api/node_modules/.pnpm/koffi@2.9.0/node_modules/koffi
+node src/cnoke/cnoke.js -p . -d src/koffi --prebuild
+```
+
+The `foundationdb` addon itself needs no rebuild: `prebuilds/linux-x64/node.napi.node` is shipped and loads once
+`libfdb_c.so` is on `LD_LIBRARY_PATH` (see [Running the unit layer](#running-the-unit-layer)).
 
 The Docker image builds fine regardless; the harness and the full snip suite do not run until the install is
 fixed.

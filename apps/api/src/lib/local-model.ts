@@ -34,7 +34,7 @@ export function isLocalLlmUrl(url: string | undefined): boolean {
 }
 
 // Model choice is llama-swap's, not Firecrawl's: MODEL_NAME names a `warm`
-// selector (e.g. "default") that serves whatever model is already running and
+// selector (e.g. "current") that serves whatever model is already running and
 // loads its first target only when none is. The `model` field goes out as-is.
 export const localModelFetch: typeof fetch = async (input, init) => {
   // Manual kill switch: while the lock file exists (bind-mounted from the

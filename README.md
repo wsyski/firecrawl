@@ -23,7 +23,7 @@
 | Feature | Setting | Where |
 |---|---|---|
 | Chat Completions for any custom `OPENAI_BASE_URL` (llama-server has no Responses API) | automatic | `apps/api/src/lib/generic-ai.ts` |
-| Use whatever model llama-swap is running; load the default only when none is | `MODEL_NAME=default` + llama-swap `warm` selector | llama-swap `config.yaml` |
+| Use whatever model llama-swap is running; load a model only when none is | `MODEL_NAME=current` + llama-swap `warm` selector | llama-swap `config.yaml` |
 | Cloud `OPENAI_BASE_URL`: send `MODEL_NAME` as-is, no llama.cpp fields | automatic | `generic-ai.ts`, `local-model.ts` |
 | Disable reasoning on chat requests | `LLM_DISABLE_THINKING=true` | `local-model.ts` |
 | Pin every chat request to one llama-server slot | `LLM_SLOT_ID=<n>` | `local-model.ts` |
@@ -47,21 +47,24 @@ out exactly as the SDK builds them, with `MODEL_NAME` as the model and none of `
 `LLM_SLOT_ID`, `LLM_LOCK_FILE`.
 
 **Resident model.** llama-swap keeps one model loaded and swapping costs a full reload, so Firecrawl does not
-pick the model at all: `MODEL_NAME=default` names a llama-swap selector with the `warm` strategy (llama-swap
+pick the model at all: `MODEL_NAME=current` names a llama-swap selector with the `warm` strategy (llama-swap
 v241+), declared in llama-swap's `config.yaml`:
 
 ```yaml
 selectors:
-  default:
+  current:                  # what Firecrawl, Hermes and OpenCode background requests ask for
     strategy: warm
     targets:
-      - swift15-27b   # loaded when nothing is running
+      - qwen38-flash-next   # loaded when nothing is running
       - qwen38-27b
+      - deepseek41-flash-coder
 ```
 
 Per request llama-swap serves a `ready` target, else a `starting` one, else loads `targets[0]`. A running
 model that is not listed in `targets` is swapped out for `targets[0]`, so add every model Firecrawl may share
-to the list. Other clients can use `default` too. Switching models is unchanged: any client that names a
+to the list. Other clients can use `current` too. Do not use llama-swap's own `default` selector instead:
+that one is `strategy: pin`, so it forces the boot model on every request rather than following what is
+loaded. Switching models is unchanged: any client that names a
 concrete model makes llama-swap swap (after the current model's in-flight requests finish), and Firecrawl's
 next request follows.
 
@@ -93,7 +96,7 @@ single-file bind mount would not follow the file being created and deleted).
 ```bash
 OPENAI_BASE_URL=http://192.168.1.100:8081/v1   # host LAN IP; host.docker.internal is not reachable on this host
 OPENAI_API_KEY=<llama-swap apiKeys key>       # sent on chat calls
-MODEL_NAME=default                              # llama-swap `warm` selector (see Resident model)
+MODEL_NAME=current                              # llama-swap `warm` selector (see Resident model)
 LLM_DISABLE_THINKING=true
 LLM_SLOT_ID=1
 LLM_LOCK_FILE=/llm-lock/llm.lock
@@ -431,6 +434,7 @@ _Pst. Hey, you, join our stargazers :)_
 | [**Map**](#map) | Discover all URLs on a website instantly |
 | [**Batch Scrape**](#batch-scrape) | Scrape thousands of URLs asynchronously |
 | [**Monitor**](https://docs.firecrawl.dev/features/monitoring) | Get notified when content on a website changes |
+| [**Alexandria**](#alexandria) | Give your agent 400+ data providers and specialized indexes (via Firecrawl Cloud) |
 
 ---
 
@@ -651,6 +655,16 @@ curl -s https://firecrawl.dev/agent-onboarding/SKILL.md
 ```
 
 See the [Skill + CLI documentation](https://docs.firecrawl.dev/sdks/cli) for all available commands. For MCP, see [firecrawl-mcp-server](https://github.com/firecrawl/firecrawl-mcp-server).
+
+---
+
+## Alexandria
+
+[Alexandria](https://alexandria.firecrawl.dev) gives your agents 400+ data providers and specialized indexes through one API, MCP, or CLI. Agents discover a tool alongside their web results, inspect its inputs and pricing, then run it to get structured data. Discovery is free; execution uses the credits listed on the tool.
+
+Install it in your agent from [alexandria.firecrawl.dev](https://alexandria.firecrawl.dev), or see the [Alexandria documentation](https://docs.firecrawl.dev/features/alexandria) for CLI, MCP, SDK, and API usage.
+
+> **Note:** Alexandria runs on [Firecrawl Cloud](https://firecrawl.dev). [Firecrawl Local](apps/local) can use it once you sign in with `firecrawl-local login`. The self-hosted server does not include it.
 
 ---
 

@@ -60,8 +60,8 @@ import {
   ProxySelectionError,
   ScrapeRetryLimitError,
   BrandingNotSupportedError,
-  XTwitterConfigurationError,
   UsOnlyUnavailableError,
+  ReservedCapacityUnavailableError,
   ExchangeRefusedError,
 } from "./error";
 import { ScrapeRetryTracker } from "./retryTracker";
@@ -132,6 +132,7 @@ import {
   SAFE_MODE_LOGIN_ACTIONS,
 } from "../../lib/safe-mode";
 import { resolveThreatProtection } from "../../lib/threat-protection/request";
+import { isUsOnly, usOnlyLocationRefusal } from "../../lib/us-only";
 import { loadFirstScreen } from "../../lib/branding/jev";
 import { UnsafeDomainBlockedError } from "../../lib/threat-protection/error";
 import { canonicalizeUrl } from "../../lib/threat-protection/providers/web-risk/canonicalize";
@@ -1017,12 +1018,7 @@ async function scrapeURLLoop(meta: Meta): Promise<ScrapeUrlResponse> {
                 continue;
               }
             }
-            if (error.engine === "x-twitter") {
-              meta.logger.warn("X/Twitter scrape failed fatally.", {
-                error: error.error,
-              });
-              throw error.error;
-            } else if (error.error instanceof EngineError) {
+            if (error.error instanceof EngineError) {
               meta.logger.warn(
                 "Engine " + error.engine + " could not scrape the page.",
                 {
@@ -1065,8 +1061,8 @@ async function scrapeURLLoop(meta: Meta): Promise<ScrapeUrlResponse> {
               error.error instanceof ProxySelectionError ||
               error.error instanceof NoCachedDataError ||
               error.error instanceof AgentIndexOnlyError ||
-              error.error instanceof XTwitterConfigurationError ||
               error.error instanceof UsOnlyUnavailableError ||
+              error.error instanceof ReservedCapacityUnavailableError ||
               error.error instanceof ExchangeRefusedError ||
               error.error instanceof ThirdPartyDataTermsRequiredError
             ) {
@@ -1368,6 +1364,17 @@ export async function scrapeURL(
         options.skipTlsVerification = false;
       }
 
+      const usOnlyLocationError = usOnlyLocationRefusal(
+        internalOptions.teamFlags ?? undefined,
+        options.location?.country,
+      );
+      if (usOnlyLocationError) {
+        return {
+          success: false,
+          error: new UsOnlyUnavailableError(usOnlyLocationError),
+        };
+      }
+
       const meta = await buildMetaObject(
         id,
         url,
@@ -1468,6 +1475,7 @@ export async function scrapeURL(
                       url: urlToCheck,
                       zeroDataRetention:
                         internalOptions.zeroDataRetention || false,
+                      usOnly: isUsOnly(internalOptions.teamFlags ?? undefined),
                       location: options.location,
                       skipTlsVerification: options.skipTlsVerification,
                     },

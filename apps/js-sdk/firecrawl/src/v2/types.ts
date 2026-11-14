@@ -856,15 +856,36 @@ export interface GovSearchOptions {
   court?: string;
   /** Keep only pages from one type of court. */
   courtType?: GovSearchCourtType;
-  /** Keep only pages that cite one law or case, as a printed citation such as "42 U.S.C. § 1983" or "5 U.S. 137", or a citation id such as "us:usc:42:1983". */
-  cites?: string;
+  /** Keep only pages that cite a law or case, as a printed citation such as "42 U.S.C. § 1983" or "5 U.S. 137", or a citation id such as "us:usc:42:1983". A list of up to 32 keeps pages citing any of them. */
+  cites?: string | string[];
   /** Keep only pages from one site, such as "irs.gov". */
   domain?: string;
+  /** Result groups to return: `web` (the default) and `gov`, the same results with the index's labels. */
+  sources?: GovSearchSource[];
+}
+
+export type GovSearchSource = "web" | "gov";
+
+/** A Government Index result with the index's labels; a label the index does not have is absent. */
+export interface GovSearchResult extends SearchResultWeb {
+  /** "us" for federal, or "us-" plus a two-letter state or territory code. */
+  jurisdiction?: string;
+  /** CourtListener court id, such as "scotus" or "ca9". */
+  court?: string;
+  courtType?: GovSearchCourtType;
+  /** Citation ids of the laws and cases the page cites. */
+  cites?: string[];
+  /** Citation ids other pages cite this page by; pass one as `cites` to find them. */
+  citedAs?: string[];
+  lang?: string;
+  /** Crawl time in Unix milliseconds. */
+  updatedAt?: number;
 }
 
 export interface GovSearchResponse {
   success: boolean;
-  data: { web: SearchResultWeb[] };
+  /** `web` is present unless `sources` leaves it out; `gov` is present when `sources` includes it. */
+  data: { web?: SearchResultWeb[]; gov?: GovSearchResult[] };
 }
 
 export interface SearchResultWeb {
@@ -978,6 +999,8 @@ export interface FindToolsData {
   }>;
   total: number;
   next: AlexandriaCall | null;
+  /** Opaque feedback token of this find-tools call. Absent when the API issues none. */
+  feedbackToken?: string;
 }
 
 export interface AlexandriaScrapeRequest extends AlexandriaOptions {
@@ -1007,12 +1030,15 @@ export type AlexandriaScrapeResult =
       records?: number;
       upstreamStatus?: number;
       recordedAt?: string;
+      /** Opaque token to pass to `alexandriaFeedback`. Absent under zero data retention. */
+      feedbackToken?: string;
       error?: undefined;
       [key: string]: unknown;
     }
   | {
       provider?: string;
       capability?: string;
+      feedbackToken?: string;
       error: AlexandriaScrapeError;
       [key: string]: unknown;
     };
@@ -1241,6 +1267,60 @@ export interface FeedbackResponse {
   creditsRefundedToday?: number;
   dailyRefundCap?: number;
   warning?: string;
+}
+
+export interface AlexandriaProviderFeedback {
+  name: string;
+  issue:
+    | "missing_provider"
+    | "insufficient_coverage"
+    | "provider_unavailable"
+    | "other";
+  why: string;
+}
+
+export type AlexandriaCapabilityFeedback = {
+  name: string;
+  provider: string;
+  why: string;
+} & (
+  | { issue: "new_capability_request"; requestedFunctionality: string }
+  | {
+      issue:
+        | "missing_capability"
+        | "insufficient_functionality"
+        | "incorrect_result"
+        | "execution_error"
+        | "other";
+      requestedFunctionality?: string;
+    }
+);
+
+export interface AlexandriaCallRating {
+  /** The `feedbackToken` of an Alexandria call result. */
+  token: string;
+  rating: FeedbackRating;
+}
+
+export interface AlexandriaFeedbackRequest {
+  /** Session-level rating, applied to every call in `tokens`. */
+  rating: FeedbackRating;
+  requestedWebsite: { url: string; requestedFunctionality: string };
+  rationale: string;
+  objective?: string;
+  providerFeedback?: AlexandriaProviderFeedback[];
+  capabilityFeedback?: AlexandriaCapabilityFeedback[];
+  /** Tokens of the calls `rating` covers: at most 20, newest last. */
+  tokens?: string[];
+  /** Per-call ratings: at most 20. A token here need not also be in `tokens`. */
+  callRatings?: AlexandriaCallRating[];
+  integration?: string | null;
+  origin?: string;
+}
+
+export interface AlexandriaFeedbackResponse extends FeedbackResponse {
+  /** Tokens that failed verification (expired, other team, or forged). */
+  rejectedTokens?: number;
 }
 
 /**

@@ -81,8 +81,9 @@ All commands run from `apps/api/`. `pnpm` is not on `PATH` — use `corepack pnp
 3. Run it (`pnpm` → `corepack pnpm`):
    - Single snip: `corepack pnpm harness pnpm exec vitest run src/__tests__/snips/v2/<file>.test.ts`
    - All snips: `corepack pnpm harness pnpm test:snips`
-   - Unit tests (colocated `*.test.ts`) need no harness:
-     `corepack pnpm exec vitest run src/lib/<file>.test.ts`
+   - Unit tests (colocated `*.test.ts`) need no harness. One file:
+     `corepack pnpm exec vitest run src/lib/<file>.test.ts`; all of them: `bin/unit-tests.sh` (it starts its own
+     redis and needs `FDB_CLIENT_DIR` for `libfdb_c.so` — see [DESIGN.md](DESIGN.md#running-the-unit-layer))
    - Don't start the server yourself for tests — the harness owns the stack. To run one snip against an
      already-running stack, see [DESIGN.md](DESIGN.md#running-one-snip-against-an-already-running-stack).
    - The full suite is slow; run only relevant tests locally and let CI run everything.
@@ -125,6 +126,7 @@ Never bypass knip with `--no-verify`; fix unused exports/files it reports, even 
 | Search providers + fallback chain | `apps/api/src/search/v2/index.ts` |
 | Fork LLM transport / Jev safe filter | `apps/api/src/lib/{local-model,generic-ai}.ts`, `src/search/safe-search.ts` |
 | Postman suite | `postman/run.sh`, `postman/firecrawl-integration-test.postman_collection.json` |
+| Unit-layer test runner | `bin/unit-tests.sh` |
 | Vitest / Knip / Prettier / TS config | `apps/api/{vitest.config.ts,knip.config.ts,.prettierrc,tsconfig.json}` |
 | Design notes / self-host docs | `DESIGN.md`, `SELF_HOST.md` |
 
