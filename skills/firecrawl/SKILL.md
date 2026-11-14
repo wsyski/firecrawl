@@ -20,7 +20,10 @@ LLM formats go to llama-swap (`192.168.1.100:8081`); search goes to SearXNG (`19
 - Health: `curl -s $FC/v0/health/liveness` → `{"status":"ok"}`.
 - `maxConcurrency` is 2 and the GPU is shared: **run requests sequentially**.
 
-Every command below was run against this instance on 2026-10-11.
+Every command below was re-run against this instance on 2026-11-14 (build at upstream merge
+`97332ad00`): health, scrape (markdown and json through the local model, 13.8 s warm), search
+(web + news, SearXNG answering with fire-engine skipped), the `github` category rejection and the
+`fc` wrapper all behave as written. Crawl, batch and parse carry over from the 2026-10-11 pass.
 
 ## `fc` (preferred)
 
@@ -98,7 +101,12 @@ curl -s $FC/v2/scrape -H 'Content-Type: application/json' \
 ```
 
 v2 takes the json format as an object in `formats`. `jsonOptions` is v1-only and v2 rejects it.
-Prefer this to `/extract`, which is deprecated here (v1 took 105 s).
+Prefer this to `/extract`, which is deprecated here (v1 took 105 s). **Every `/v0` and `/v1` route
+(plus `/v2/extract`) answers 410 `ENDPOINT_REMOVED` from 2026-12-10** — until then they still work and
+answer with `Deprecation: @1793923200`, `Sunset: Thu, 10 Dec 2026 15:00:00 GMT` and a
+`Link: … rel="successor-version"` pointing at the v2 route (all three verified live 2026-11-14).
+`/v2/*` is unaffected, and so is the `/v0/health/liveness` probe above. Only builds from 2026-11-14 on
+carry those headers — their absence means the container predates the sunset table, not that the date moved.
 
 ### Search
 
@@ -182,3 +190,8 @@ HTML and PDF verified.
 
 These need fire-engine, browser sessions or cloud billing, so plan without them:
 `screenshot`, `actions`, `/v2/agent`, browser/interact, `changeTracking`, and team credit-usage.
+
+Same for the upstream catalogue and research backends: `sources: ["alexandria","skills"]` need
+`FIRE_EXCHANGE_URL`, the `research`/`developer` categories need `RESEARCH_PROXY_URL`, and `gov` routing
+needs `GOV_ROUTING_ENABLED` + `SEARCH_PLATFORM_URL`. None is set here, so those inputs are skipped and
+answer nothing (no error) — stay on `sources: web/news/images` with no `categories`.

@@ -40,7 +40,8 @@ All LLM-side behaviour lives in `localModelFetch` (`apps/api/src/lib/local-model
 `fetch` of the OpenAI provider whenever `OPENAI_BASE_URL` is local: loopback, a private or Tailscale IP
 (`10/8`, `172.16/12`, `192.168/16`, `100.64/10`), a single-label host (docker service name) or
 `*.local` / `*.lan` / `*.internal` (incl. `host.docker.internal`). It adds fields to chat bodies and never
-changes a field the caller already set, including `model`. Unit tests: `apps/api/src/lib/local-model.test.ts`.
+changes a field the caller already set, including `model`. Unit tests: `apps/api/src/lib/local-model.test.ts`,
+or the whole unit layer in one command with `bin/unit-tests.sh` ([DESIGN.md](DESIGN.md#running-the-unit-layer)).
 
 **Cloud model.** Any other `OPENAI_BASE_URL` (e.g. `https://openrouter.ai/api/v1`) is a cloud API: requests go
 out exactly as the SDK builds them, with `MODEL_NAME` as the model and none of `LLM_DISABLE_THINKING`,
@@ -324,7 +325,8 @@ curl -s -o /dev/null -w '%{http_code}\n' http://localhost:3002/v0/health/livenes
 ### Examples
 
 JSON extraction through the local model (`/v2/scrape`; on `/v1/scrape` the shape is
-`"formats": ["json"]` plus a separate `jsonOptions` object):
+`"formats": ["json"]` plus a separate `jsonOptions` object — and every `/v0`/`/v1` route answers 410 from
+its 2026-12-10 sunset, so prefer `/v2`):
 
 ```bash
 curl -s -X POST http://localhost:3002/v2/scrape -H 'Content-Type: application/json' -d '{
@@ -383,9 +385,10 @@ the old text. `--check` skips cleanly when there is no hub, so CI is unaffected.
 
 ### Keeping up with upstream
 
-`git fetch upstream && git merge upstream/main`, then run the unit tests above, rebuild the `api` image and
-repeat the JSON extraction example. Conflicts, if any, are in `local-model.ts`, `generic-ai.ts`, `config.ts`,
-`controllers/v1/types.ts`, `docker-compose.yaml` and this section of the README.
+`git fetch upstream && git merge upstream/main`, then run the unit tests above (`bin/unit-tests.sh`), rebuild the
+`api` image (`bin/deploy-docker.sh --apply`) and repeat the JSON extraction example. Conflicts, if any, are in
+`local-model.ts`, `generic-ai.ts`, `search/execute.ts`, `config.ts`, `controllers/v1/types.ts`,
+`docker-compose.yaml` and this section of the README.
 
 ---
 

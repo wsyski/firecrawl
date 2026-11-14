@@ -145,5 +145,5 @@ README-only pointers to separate catalogs — no code. `skills/` holds the fork'
 
 This project has no per-project vault (no `.claude-obsidian.json` at the root), so `/wiki-*` does not
 apply. Reference notes live in the general `KnowledgeBase` vault at `~/Documents/Obsidian/KnowledgeBase`
-— the local stack runbook is `docs/infrastructure/firecrawl-local-setup.md`; SearXNG (a separate
-project, `/opt/playground/searxng`) is `docs/infrastructure/searxng-local-setup.md`.
+— the local stack runbook is `docs/infrastructure/firecrawl-setup.md`; SearXNG (a separate
+project, `/opt/playground/searxng`) is `docs/infrastructure/searxng-setup.md`.
