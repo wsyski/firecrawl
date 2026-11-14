@@ -115,7 +115,7 @@ export function dedupeUnresponsiveEngines(
  * of the instance added the field, so an older or different instance simply
  * omits it.
  */
-export function normalizeStringList(raw: unknown): string[] {
+function normalizeStringList(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
   return [
     ...new Set(
