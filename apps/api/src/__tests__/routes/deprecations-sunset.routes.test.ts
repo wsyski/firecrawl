@@ -219,12 +219,14 @@ describe("deprecationMiddleware sunset gate", () => {
     expect(res.status).toBe(500);
   });
 
-  it("never looks anything up for an entry without a sunset", async () => {
+  it("advertises a future sunset without looking anything up yet", async () => {
+    // v0_scrape's sunset (10 Dec 2026) has not passed at AFTER_SUNSET, so the
+    // gate must not consult team flags; only entries past their sunset do.
     vi.setSystemTime(AFTER_SUNSET);
     const res = await request(appFor("v0_scrape")).get("/probe");
 
     expect(res.status).toBe(200);
-    expect(res.headers["sunset"]).toBeUndefined();
+    expect(res.headers["sunset"]).toBe("Thu, 10 Dec 2026 15:00:00 GMT");
     expect(mocks.getApiKeyTeamFlags).not.toHaveBeenCalled();
   });
 });

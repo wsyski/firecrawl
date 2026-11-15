@@ -21,8 +21,9 @@ Firecrawl is a web scraper API. The directory is a monorepo:
 
 ### Running the unit layer
 
-`bin/unit-tests.sh` runs the whole unit layer in one command: every `src/**/*.test.ts` except the snips, except
-the legacy `src/__tests__/e2e*/**` (both need the live stack), and except `src/__tests__/nuq-fdb/**` when
+`bin/tests.sh` runs the whole unit layer in one command: every `src/**/*.test.ts` except the snips, except
+the legacy `src/__tests__/e2e*/**` (both need the live stack), except `src/scraper/scrapeURL/scrapeURL.test.ts`
+(it drives the hosted fire-engine and other live services), and except `src/__tests__/nuq-fdb/**` when
 `libfdb_c.so` cannot be loaded — those files import the FoundationDB binding, so they error at import instead of
 self-skipping on `config.FDB_CLUSTER_FILE`. Vitest is called through its pinned binary, for the `pnpm exec`
 reason below.
@@ -37,15 +38,21 @@ FoundationDB client). The script starts the first when needed and points at the 
   when it holds the library. Rootless, no `.deb` install: `curl` the same release CI uses
   (foundationdb-clients 7.3.63) and `dpkg-deb -x` it into that directory.
 
-Measured after the upstream merge of 2026-11-14: 326 files pass, 8 skip, 12 fail (69 tests). All 12 are
-byte-identical to `upstream/main` and appear in no CI workflow — CI runs curated file lists, never this layer.
-`src/scraper/scrapeURL/scrapeURL.test.ts` alone is 49 of the 69: it drives fire-engine, the cloud scraper this
-fork has no access to, and is not gated with `describeIf(HAS_FIRE_ENGINE)`. The rest contradict upstream's own
-current code (`rewriteUrl.test.ts` expects `export?format=pdf` while `rewriteUrl.ts` has returned `format=html`
-since upstream `dca920257`; `html-to-markdown.test.ts` expects `- ` list bullets where the Go converter emits
-`*   `; `crawl-redis.test.ts` expects 16 permutations and the code makes 12) or want a service CI supplies
-(`ranker.test.ts` needs a real `OPENAI_API_KEY` for embeddings). Treat them as upstream's, not this fork's:
-fixing them is an upstream contribution, not fork maintenance.
+Measured after the unit-layer fixes of 2026-11-15: 335 files pass, 9 skip, 0 fail. Before those fixes the run was
+12 files / 71 tests red; all 12 were byte-identical to `upstream/main` and appear in no CI workflow — CI runs
+curated file lists, never this layer, so the failures are upstream bit-rot, now repaired fork-side:
+`rewriteUrl.test.ts` was realigned to `format=html` (upstream `dca920257`), `html-to-markdown.test.ts` to the
+`*   ` bullets the Go converter emits, `crawl-redis.test.ts` to the 12 deduped root-URL permutations,
+`engine-forcing.test.ts` to wildcard-matches-base and no-throw-uninitialized (both the code's behavior since the
+feature landed), `specialtyHandler.test.ts` to an SVG fixture (JP2 became OCR-handled in upstream `6e059d4e8`),
+`extractImages.test.ts` to the html-transformer's empty-src-to-base-URL output, `run.test.ts` (monitoring) to the
+unparenthesized `site:` group (`aa85f190a`), the sunset route test to v0_scrape's now-present sunset, the exchange
+ZDR test to a route that does not refuse forced-ZDR teams, and `ranker.test.ts` self-skips without
+`OPENAI_API_KEY` (embeddings are live). `WebScraper/__tests__/utils.test.ts` was deleted — it tested
+`WebCrawler.noSections`, removed upstream in `ba9fbd0ad`. `scrapeURL.test.ts` (49 of the 69 failures: hosted
+fire-engine, `httpstat.us`, LLM extract, drifted live pages) is excluded from this layer rather than fixed — it
+needs services, not assertions. Expect merge conflicts in those test files if upstream fixes the same drift; take
+upstream's version when it matches this behavior.
 
 ### Running one snip against an already-running stack
 

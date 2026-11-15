@@ -1,6 +1,11 @@
 import { performRanking } from "./ranker";
 
-describe("performRanking", () => {
+// performRanking embeds through the live AI provider; without a key the
+// embedding calls fail and the ranking comes back empty.
+const HAS_OPENAI = !!process.env.OPENAI_API_KEY;
+const describeIf = HAS_OPENAI ? describe : describe.skip;
+
+describeIf("performRanking", () => {
   it("should rank links based on similarity to search query", async () => {
     const linksWithContext = [
       "url: https://example.com/dogs, title: All about dogs, description: Learn about different dog breeds",

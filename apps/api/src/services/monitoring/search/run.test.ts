@@ -528,7 +528,9 @@ describe("domain scoping", () => {
       } as Partial<typeof baseTarget>,
     });
     const sentQuery = searchMock.mock.calls[0][0].query as string;
-    expect(sentQuery).toContain("(site:reuters.com OR site:spam.example)");
+    // Bare site: operators — the builder drops the parens some backends
+    // mis-parse (see search-query-builder.ts / #4100).
+    expect(sentQuery).toContain("site:reuters.com OR site:spam.example");
     expect(sentQuery).toContain("-site:spam.example");
   });
 

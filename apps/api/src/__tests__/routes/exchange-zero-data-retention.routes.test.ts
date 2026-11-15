@@ -158,9 +158,11 @@ describe("Exchange proxy under zero data retention", () => {
   it.each([{ forceZDR: true }, { scrapeZDR: "forced" }])(
     "reads the legacy and current flag alike (%o)",
     async teamFlags => {
+      // Discover refuses forced-ZDR teams outright (forceZDR forces search ZDR
+      // too), so probe the header on a route that proxies to Exchange anyway.
       flags = teamFlags;
       await request(app)
-        .get("/exchange/discover?q=people")
+        .get("/exchange/recommendations")
         .set("authorization", `Bearer ${KEY}`);
       expect(forwardedHeaders()["x-exchange-zero-data-retention"]).toBe("true");
     },

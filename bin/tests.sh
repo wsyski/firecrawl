@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
-# unit-tests.sh — run the unit layer of the test suite: every colocated *.test.ts, i.e. the
+# tests.sh — run the unit layer of the test suite: every colocated *.test.ts, i.e. the
 # ones that need no API stack. The other layer, the snips in src/__tests__/snips/, drives a
 # live API and belongs to `pnpm harness pnpm test:snips`, so it is out of scope here.
 #
-#   bin/unit-tests.sh                 the whole unit suite
-#   bin/unit-tests.sh <vitest args>   the same, passed through (a file path, -t <name>, ...)
+#   bin/tests.sh                 the whole unit suite
+#   bin/tests.sh <vitest args>   the same, passed through (a file path, -t <name>, ...)
 #
 # What is excluded, and why it is not a unit test:
 #   src/__tests__/snips/**            live API + workers, via src/harness.ts
 #   src/__tests__/e2e*/**             legacy route tests, need the running stack (engines, queue)
+#   src/scraper/scrapeURL/scrapeURL.test.ts   standalone scrapeURL against the LIVE web — hosted
+#                                     fire-engine (absent self-hosted), httpstat.us, LLM extraction;
+#                                     upstream CI never runs it either. Needs services, not just code.
 #   src/__tests__/nuq-fdb/**          only when the FoundationDB client library cannot load —
 #                                     the files import the binding, so they error at import
 #                                     instead of self-skipping on config.FDB_CLUSTER_FILE.
@@ -37,7 +40,7 @@
 # Exit: vitest's, 1 if a prerequisite is missing, 2 usage.
 set -euo pipefail
 
-usage() { sed -n '2,37p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,40p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then usage; exit 0; fi
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -48,7 +51,7 @@ FDB_CLIENT_DIR="${FDB_CLIENT_DIR:-/opt/ext/fdb-clients/usr/lib}"
 REDIS_CONTAINER=firecrawl-unit-redis
 
 if [ ! -f "$VITEST" ]; then
-  echo "bin/unit-tests.sh: no vitest at $VITEST — run: cd apps/api && corepack pnpm install" >&2
+  echo "bin/tests.sh: no vitest at $VITEST — run: cd apps/api && corepack pnpm install" >&2
   exit 1
 fi
 
@@ -69,7 +72,7 @@ trap cleanup EXIT
 if [ -z "${REDIS_URL:-}" ] && ! redis_up; then
   docker rm -f "$REDIS_CONTAINER" >/dev/null 2>&1 || true
   if ! docker run -d --rm --name "$REDIS_CONTAINER" -p 127.0.0.1:6379:6379 redis:alpine >/dev/null; then
-    echo "bin/unit-tests.sh: no redis on 127.0.0.1:6379 and none could be started — the" >&2
+    echo "bin/tests.sh: no redis on 127.0.0.1:6379 and none could be started — the" >&2
     echo "  redis-backed suites fail. Start one, or set REDIS_URL for a reachable one." >&2
     exit 1
   fi
@@ -81,6 +84,7 @@ fi
 EXCLUDES=(
   --exclude='src/__tests__/snips/**'
   --exclude='src/__tests__/e2e*/**'
+  --exclude='src/scraper/scrapeURL/scrapeURL.test.ts'
 )
 if ! (cd "$API" && node -e "import('foundationdb').catch(() => process.exit(1))") >/dev/null 2>&1; then
   echo "unit tests: libfdb_c.so not loadable (FDB_CLIENT_DIR=$FDB_CLIENT_DIR) — excluding nuq-fdb"

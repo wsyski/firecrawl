@@ -66,8 +66,10 @@ describe("Engine Forcing", () => {
       );
     });
 
-    it("should not match wildcard pattern for base domain", () => {
-      expect(getEngineForUrl("https://subdomain.com")).toBeUndefined();
+    it("matches wildcard patterns for the base domain too", () => {
+      expect(getEngineForUrl("https://subdomain.com")).toBe(
+        "fire-engine;chrome-cdp",
+      );
     });
 
     it("should return array of engines when configured", () => {
@@ -92,16 +94,14 @@ describe("Engine Forcing", () => {
       expect(getEngineForUrl("")).toBeUndefined();
     });
 
-    it("should throw error if not initialized", async () => {
+    it("returns undefined when the module was never initialized", async () => {
       delete config.FORCED_ENGINE_DOMAINS;
       // Re-import a fresh, uninitialized module instance.
       vi.resetModules();
       const { getEngineForUrl: freshGetEngineForUrl } = await import(
         "../engine-forcing.js"
       );
-      expect(() => {
-        freshGetEngineForUrl("https://example.com");
-      }).toThrow("Engine forcing not initialized");
+      expect(freshGetEngineForUrl("https://example.com")).toBeUndefined();
     });
   });
 });

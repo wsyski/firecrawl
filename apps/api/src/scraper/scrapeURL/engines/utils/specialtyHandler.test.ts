@@ -36,11 +36,12 @@ const PNG = Buffer.concat([
   Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
   Buffer.alloc(64),
 ]);
-// JPEG 2000 signature box: a real image format none of the parsers open.
-const JP2 = Buffer.concat([
-  Buffer.from([
-    0x00, 0x00, 0x00, 0x0c, 0x6a, 0x50, 0x20, 0x20, 0x0d, 0x0a, 0x87, 0x0a,
-  ]),
+// An SVG: browsers hand it off unrendered, no image sniffer claims it, and no
+// document parser opens it — the rejection must survive the byte sniffing.
+const SVG = Buffer.concat([
+  Buffer.from(
+    "<svg xmlns='http://www.w3.org/2000/svg'><rect width='10' height='10'/></svg>",
+  ),
   Buffer.alloc(64),
 ]);
 
@@ -228,14 +229,14 @@ describe("specialtyScrapeCheck: the bytes decide when the header does not", () =
     const message = await expectUnsupported(
       specialtyScrapeCheck(
         logger,
-        { "content-type": "image/jp2" },
-        download(JP2),
+        { "content-type": "image/svg+xml" },
+        download(SVG),
         undefined,
         undefined,
         gate,
       ),
     );
-    expect(message).toContain("image/jp2");
+    expect(message).toContain("image/svg+xml");
     expect(gate).not.toHaveBeenCalled();
   });
 

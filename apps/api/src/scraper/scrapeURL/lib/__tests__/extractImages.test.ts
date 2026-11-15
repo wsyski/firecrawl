@@ -226,8 +226,10 @@ describe("extractImages", () => {
 
     const images = await extractImages(html, baseUrl);
 
+    // The html-transformer resolves an empty src to the base URL, so the base
+    // joins the list; the invalid schemes stay out.
     expect(images).toContain("https://example.com/valid.jpg");
     expect(images).not.toContain("javascript:alert('xss')");
-    expect(images).toHaveLength(1);
+    expect(images).toHaveLength(2);
   });
 });

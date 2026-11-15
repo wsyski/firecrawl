@@ -17,6 +17,11 @@ vi.mock("../auth", () => ({
   reduce: vi.fn(),
 }));
 vi.mock("../../services/idempotency/validate");
+// The controller fires createIdempotencyKey without awaiting it; unmocked it
+// hits an unconfigured Postgres client and the rejection leaks past the test.
+vi.mock("../../services/idempotency/create", () => ({
+  createIdempotencyKey: vi.fn(async () => undefined),
+}));
 
 describe("crawlController", () => {
   it("should prevent duplicate requests using the same idempotency key", async () => {
