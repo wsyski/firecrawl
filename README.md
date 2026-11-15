@@ -30,6 +30,7 @@
 | Manual kill switch for all LLM calls | `LLM_LOCK_FILE=<path>` | `local-model.ts`, `docker-compose.yaml` |
 | 10-minute timeouts for JSON/extract requests (slow local models) | automatic | `apps/api/src/controllers/v1/types.ts` |
 | `restart: unless-stopped` on all long-running services | automatic | `docker-compose.yaml` |
+| Allow local/private targets in API fetches for local testing | `ALLOW_LOCAL_WEBHOOKS=true` | `docker-compose.yaml`, `.env` |
 | Search via a local SearXNG instead of rate-limited DuckDuckGo | `SEARXNG_ENDPOINT=http://192.168.1.100:8888` | `.env`; SearXNG itself: `/opt/playground/searxng` |
 | Pick a SearXNG category per request (`finance poland`, …) | `"searxngCategory"` in the `/v2/search` body | `apps/api/src/search/v2/searxng.ts` |
 | Say which provider answered and what it ignored | automatic (`provenance` beside `data`) | `apps/api/src/search/v2/provenance.ts` |
@@ -360,14 +361,21 @@ journalctl -u llama-swap -o cat | grep 'selected slot'
 # -> slot get_availabl: id  1 | task -1 | selected slot by id (1)
 ```
 
-Run the fork's unit tests (34 tests). On this host `pnpm exec`/`pnpm test` first try to reinstall
-dependencies and fail building the native `foundationdb` module without its client headers, so call the
-installed vitest directly:
+Run the fork's unit layer with `bin/tests.sh` from the repo root; it calls the pinned vitest, starts a
+throwaway redis, and removes it on exit. On this host `pnpm exec`/`pnpm test` first try to reinstall
+dependencies and fail building the native `foundationdb` module without its client headers.
 
 ```bash
-cd apps/api
-node "$(ls -d node_modules/.pnpm/vitest@*/node_modules/vitest | head -1)/vitest.mjs" run src/lib/local-model.test.ts
+cd /opt/playground/firecrawl
+bin/tests.sh
 ```
+
+The live snips are separate: `cd apps/api && corepack pnpm harness pnpm test:snips` owns the API,
+workers and Redis. For the local test site and TLS fixtures set `TEST_SUITE_SELF_HOSTED=true`,
+`TEST_SUITE_WEBSITE=http://127.0.0.1:4321` and `ALLOW_LOCAL_WEBHOOKS=true`; the Compose API also
+needs `ALLOW_LOCAL_WEBHOOKS=true` when it has to reach a private/LAN target. On the local llama-swap
+model, run AI snips serially (`--no-file-parallelism --maxConcurrency=1`); `scrapeTimeout` is 600s
+and deep-research gets 20 minutes.
 
 ### The `/firecrawl` skill
 

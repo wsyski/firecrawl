@@ -82,6 +82,7 @@ PY
 OPENAI_BASE_URL="${OPENAI_BASE_URL:-$(from_file "$env_file" OPENAI_BASE_URL)}"
 TYPESAFE_BASE_URL="${TYPESAFE_BASE_URL:-$(from_file "$env_file" TYPESAFE_BASE_URL)}"
 TYPESAFE_MODEL="${TYPESAFE_MODEL:-$(from_file "$env_file" TYPESAFE_MODEL)}"
+searxngUrl="${searxngUrl:-$(from_file "$env_file" SEARXNG_ENDPOINT)}"
 
 # llama-swap is reachable directly, so drop the /v1 the OpenAI SDK appends.
 openApiUrl="${openApiUrl:-${OPENAI_BASE_URL%/v1}}"
@@ -105,6 +106,7 @@ fi
 # warning rather than a hard stop - but say so, since the failure otherwise is a
 # bare 401 from Zen.
 [[ -n "$TYPESAFE_API_KEY" ]] || echo "run.sh: warning: no TYPESAFE_API_KEY in $secrets_file or $postman_env; the Jev requests will fail with 401." >&2
+[[ -n "$searxngUrl" ]] || echo "run.sh: warning: no SEARXNG_ENDPOINT in $env_file (or searxngUrl export); the direct SearXNG request will fail." >&2
 
 # Secrets go on the command line, so keep them out of any printed output.
 exec newman run \
@@ -116,4 +118,5 @@ exec newman run \
   --env-var "typesafeUrl=$typesafeUrl" \
   --env-var "typesafeApiKey=$TYPESAFE_API_KEY" \
   --env-var "jevModel=$jevModel" \
+  --env-var "searxngUrl=$searxngUrl" \
   "$@"

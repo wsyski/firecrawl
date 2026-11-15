@@ -2,6 +2,7 @@ import {
   ALLOW_TEST_SUITE_WEBSITE,
   describeIf,
   HAS_AI,
+  itIf,
   TEST_PRODUCTION,
   TEST_SUITE_WEBSITE,
 } from "../lib";
@@ -299,7 +300,7 @@ describe("/v2/parse", () => {
     scrapeTimeout,
   );
 
-  it(
+  itIf(parseUploadRefTestRequired)(
     "limits each team to 10 unparsed upload refs from the last 24 hours",
     async () => {
       enableLocalUploadRefAdapter();

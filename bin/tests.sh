@@ -93,4 +93,4 @@ fi
 
 echo "unit tests: $API/src — excluding ${EXCLUDES[*]#--exclude=}"
 cd "$API"
-exec node "$VITEST" run "${EXCLUDES[@]}" "$@"
+node "$VITEST" run "${EXCLUDES[@]}" "$@"

@@ -186,6 +186,25 @@ HTML and PDF verified.
 - The first LLM call after llama-swap has unloaded the model is slower.
 - `mobile` and `location` each work with a "may be partial" warning. Combining them fails with 500.
 
+## Test suite (operator)
+
+- Unit layer: `bin/tests.sh` from the repo root (it calls the pinned vitest, starts a throwaway
+  redis, and removes it on exit). Current run: 335 files pass, 9 skip, 0 fail — 4954 tests pass,
+  92 skip.
+- Snips: `cd apps/api && corepack pnpm harness pnpm test:snips` with
+  `TEST_SUITE_SELF_HOSTED=true`, `TEST_SUITE_WEBSITE=http://127.0.0.1:4321` and
+  `ALLOW_LOCAL_WEBHOOKS=true`. The harness owns the API/workers; do not run the snips against the
+  Compose API directly, because its host `127.0.0.1` fixtures and the TLS test server live in the
+  test process. With the local llama-swap model, serialise AI tests
+  (`--no-file-parallelism --maxConcurrency=1`); `scrapeTimeout` is 600s and
+  deep-research gets 20 minutes.
+- A Compose API that must scrape the LAN test site or a local TLS fixture needs
+  `ALLOW_LOCAL_WEBHOOKS=true`; without it `safeFetch` rejects private targets. `docker-compose.yaml`
+  now forwards the variable, defaulting to `false`.
+- Postman: `./postman/run.sh` covers the SearXNG provider directly and through `/v2/search`
+  (provenance, category pinning, unknown-category refusal), plus one direct key check for
+  `OPENAI_API_KEY`, `TYPESAFE_API_KEY` and `BULL_AUTH_KEY` so a wrong key fails the run.
+
 ## Not available here
 
 These need fire-engine, browser sessions or cloud billing, so plan without them:

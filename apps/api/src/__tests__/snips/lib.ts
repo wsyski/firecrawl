@@ -61,7 +61,7 @@ if (isLocalUrl(TEST_SUITE_WEBSITE)) {
 }
 
 // Due to the limited resources of the CI runner, we need to set a longer timeout for the many many scrape tests
-export const scrapeTimeout = 90000;
+export const scrapeTimeout = 600000; // local llama-swap extraction can exceed 300s
 export const indexCooldown = 30000;
 
 // =========================================

@@ -26,7 +26,7 @@ describeDeepResearch("Deep Research", () => {
           query: query,
           maxDepth: 2,
           maxUrls: 3,
-          timeLimit: 300, // 5 minutes in seconds
+          timeLimit: 1200, // 20 minutes in seconds, for slow local models
         },
         identity,
       );
@@ -45,5 +45,5 @@ describeDeepResearch("Deep Research", () => {
       console.error("Deep research test failed with error:", error);
       throw error;
     }
-  }, 300000); // 5 minutes timeout to account for processing time
+  }, 1200000); // 20 minutes timeout for slow local models
 });

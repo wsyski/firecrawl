@@ -948,8 +948,19 @@ export async function buildFallbackList(meta: Meta): Promise<
   // above the threshold and in the stealth-only narrowing below, so an HTML
   // page that escalated to stealthProxy would fail on every engine.
   const scoresStealthProxy = useFireEngine || meta.mock !== null;
-  const isScoredFlag = (flag: FeatureFlag) =>
-    scoresStealthProxy || flag !== "stealthProxy";
+  // A screenshot flag no current engine can satisfy must not narrow the
+  // waterfall to nothing. Index supports it when it is the cache copy; with
+  // neither fire-engine, mocks, nor index, let the normal engines run and
+  // report the field as dropped.
+  const scoresScreenshot =
+    useFireEngine || meta.mock !== null || (useIndex && shouldUseIndex(meta));
+  const isScoredFlag = (flag: FeatureFlag) => {
+    if (flag === "stealthProxy") return scoresStealthProxy;
+    if (flag === "screenshot" || flag === "screenshot@fullScreen") {
+      return scoresScreenshot;
+    }
+    return true;
+  };
 
   const prioritySum = [...meta.featureFlags]
     .filter(isScoredFlag)

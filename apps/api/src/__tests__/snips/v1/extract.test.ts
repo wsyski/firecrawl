@@ -3,6 +3,7 @@ import {
   ALLOW_TEST_SUITE_WEBSITE,
   HAS_AI,
   itIf,
+  scrapeTimeout,
   TEST_API_URL,
   TEST_PRODUCTION,
   TEST_SUITE_WEBSITE,
@@ -48,7 +49,7 @@ describeExtract(TEST_PRODUCTION || (HAS_AI && ALLOW_TEST_SUITE_WEBSITE))(
               required: ["company_mission", "is_open_source"],
             },
             scrapeOptions: {
-              timeout: 75000,
+              timeout: scrapeTimeout,
             },
             origin: "api-sdk",
           },
@@ -61,7 +62,7 @@ describeExtract(TEST_PRODUCTION || (HAS_AI && ALLOW_TEST_SUITE_WEBSITE))(
         expect(typeof res.data.is_open_source).toBe("boolean");
         expect(res.data.is_open_source).toBe(true);
       },
-      90000,
+      scrapeTimeout,
     );
 
     it.concurrent(
@@ -81,7 +82,7 @@ describeExtract(TEST_PRODUCTION || (HAS_AI && ALLOW_TEST_SUITE_WEBSITE))(
               required: ["company_name"],
             },
             scrapeOptions: {
-              timeout: 75000,
+              timeout: scrapeTimeout,
             },
             origin: "api-sdk",
           },
@@ -91,7 +92,7 @@ describeExtract(TEST_PRODUCTION || (HAS_AI && ALLOW_TEST_SUITE_WEBSITE))(
         expect(res.data).toHaveProperty("company_name");
         expect(typeof res.data.company_name).toBe("string");
       },
-      90000,
+      scrapeTimeout,
     );
   },
 );

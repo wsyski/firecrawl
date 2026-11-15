@@ -156,7 +156,7 @@ describe("V1 Types Validation", () => {
       const result = scrapeRequestSchema.parse(input);
       expect(result.formats).toContain("extract");
       expect(result.extract).toBeDefined();
-      expect(result.timeout).toBe(60000); // Should be transformed from 30000
+      expect(result.timeout).toBe(600000); // prefault for extract/json, not the 30000 bump
     });
 
     it("should reject json format without jsonOptions", () => {
@@ -188,7 +188,7 @@ describe("V1 Types Validation", () => {
       expect(result.formats).toContain("json");
       expect(result.formats).toContain("extract"); // Should be added by transform
       expect(result.jsonOptions).toBeDefined();
-      expect(result.timeout).toBe(60000); // Should be transformed from 30000
+      expect(result.timeout).toBe(600000); // prefault for extract/json, not the 30000 bump
     });
 
     it("should accept a jsonOptions schema that uses standard string formats", () => {
@@ -409,7 +409,7 @@ describe("V1 Types Validation", () => {
       const result = extractRequestSchema.parse(input);
       expect(result.urls).toEqual(["https://example.com"]);
       expect(result.origin).toBe("api");
-      expect(result.timeout).toBe(60000);
+      expect(result.timeout).toBe(600000);
     });
 
     it("should accept valid extract request with prompt", () => {

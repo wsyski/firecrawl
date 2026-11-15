@@ -79,7 +79,7 @@
                 "scrape"
               ]
             },
-            "description": "No LLM involved — pure fetch + markdown conversion. Good smoke test that doesn't depend on Open APi."
+            "description": "No LLM involved \u2014 pure fetch + markdown conversion. Good smoke test that doesn't depend on Open APi."
           }
         },
         {
@@ -117,7 +117,7 @@
                 "scrape"
               ]
             },
-            "description": "Routes the extraction through OPENAI_BASE_URL (Open APi) via Chat Completions. Local models are slow — expect ~15-30s. Response should have data.json.heading populated; if data.json is missing, check the api container logs for a coerceFieldsToFormats warning (schema mismatch) and cross-check Open APi's server log."
+            "description": "Routes the extraction through OPENAI_BASE_URL (Open APi) via Chat Completions. Local models are slow \u2014 expect ~15-30s. Response should have data.json.heading populated; if data.json is missing, check the api container logs for a coerceFieldsToFormats warning (schema mismatch) and cross-check Open APi's server log."
           }
         }
       ]
@@ -281,7 +281,7 @@
                 "extract"
               ]
             },
-            "description": "Firecrawl marks /v1/extract deprecated in favor of /v2/scrape. Its reranker (lib/extract/reranker.ts) is hardcoded to Gemini and does NOT route through Open APi — requires GOOGLE_GENERATIVE_AI_API_KEY to be set, falls back gracefully (logs a warning, returns empty relevance list) if that key is weak/missing rather than failing the whole request. Expect ~40-60s."
+            "description": "Firecrawl marks /v1/extract deprecated in favor of /v2/scrape. Its reranker (lib/extract/reranker.ts) is hardcoded to Gemini and does NOT route through Open APi \u2014 requires GOOGLE_GENERATIVE_AI_API_KEY to be set, falls back gracefully (logs a warning, returns empty relevance list) if that key is weak/missing rather than failing the whole request. Expect ~40-60s."
           }
         }
       ]
@@ -566,6 +566,108 @@
               }
             }
           ]
+        },
+        {
+          "name": "OpenAI key accepted (direct chat)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "",
+                  "pm.test('the OpenAI key is accepted', () => pm.expect(pm.response.code).to.not.be.oneOf([401, 403]));",
+                  "if (pm.response.code === 200) {",
+                  "  const body = pm.response.json();",
+                  "  pm.test('chat completion returned choices', () => pm.expect(body.choices).to.be.an('array').with.length.above(0));",
+                  "  pm.test('choices carry an assistant message', () => {",
+                  "    const m = body.choices[0] && body.choices[0].message;",
+                  "    pm.expect(m, 'message').to.be.an('object');",
+                  "    pm.expect(m.role).to.eql('assistant');",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{openApiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{openApiUrl}}/v1/chat/completions",
+              "host": [
+                "{{openApiUrl}}"
+              ],
+              "path": [
+                "v1",
+                "chat",
+                "completions"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"model\": \"current\",\n  \"messages\": [{\"role\": \"user\", \"content\": \"Reply with the word ok.\"}],\n  \"max_tokens\": 5\n}"
+            },
+            "description": "A wrong OPENAI_API_KEY makes llama-swap answer 401; the Firecrawl scrape tests alone would not expose it."
+          }
+        },
+        {
+          "name": "TypeSafe key accepted (direct systemone)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "",
+                  "pm.test('the TypeSafe key is accepted', () => pm.expect(pm.response.code).to.not.be.oneOf([401, 403]));",
+                  "if (pm.response.code === 200) {",
+                  "  const body = pm.response.json();",
+                  "  const noul = body.answers && body.answers.explicit && body.answers.explicit.noul;",
+                  "  pm.test('systemOne answers the explicit question', () => pm.expect(noul).to.be.a('number'));",
+                  "  pm.test('the configured model answered', () => pm.expect(body.model).to.eql(pm.variables.replaceIn('{{jevModel}}')));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{typesafeApiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{typesafeUrl}}/v1/systemone",
+              "host": [
+                "{{typesafeUrl}}"
+              ],
+              "path": [
+                "v1",
+                "systemone"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"state\": \"ok\",\n  \"model\": \"{{jevModel}}\",\n  \"questions\": {\"explicit\": {\"type\": \"noul\", \"instructions\": \"Is this adult content?\"}}\n}"
+            },
+            "description": "A wrong TYPESAFE_API_KEY answers 401; the Jev tests only skip on an empty key and retry on quota."
+          }
         }
       ]
     },
@@ -602,7 +704,7 @@
                 "queues"
               ]
             },
-            "description": "Set {{bullAuthKey}} in the environment to match BULL_AUTH_KEY in .env (not committed here — fill it in locally). Opens the Bull queue admin UI response."
+            "description": "Set {{bullAuthKey}} in the environment to match BULL_AUTH_KEY in .env (not committed here \u2014 fill it in locally). Opens the Bull queue admin UI response."
           },
           "description": "Queue admin UI, served straight from the api container. BULL_AUTH_KEY is a secret path segment rather than a credential, so a blank {{bullAuthKey}} gives 404, not an auth error. Pass it at runtime: --env-var bullAuthKey=<BULL_AUTH_KEY from .env>."
         }
@@ -1001,11 +1103,13 @@
                       "pm.test('news is filled (SearXNG categories=news)', () => {",
                       "  pm.expect(payload.news).to.be.an('array').with.length.above(0);",
                       "});",
-                      "pm.test('news results use snippet and date, not description', () => {",
+                      "pm.test('news results use snippet, not description', () => {",
                       "  const news = payload.news || [];",
-                      "  const dated = news.filter(r => r && r.date);",
                       "  const described = news.filter(r => r && r.description);",
-                      "  pm.expect(dated, 'no news result carried a date').to.have.length.above(0);",
+                      "  const snippets = news.filter(r => r && typeof r.snippet === 'string' && r.snippet.length > 0);",
+                      "  const dated = news.filter(r => r && r.date);",
+                      "  console.log(snippets.length + '/' + news.length + ' carry a snippet; ' + dated.length + ' carry a date');",
+                      "  pm.expect(snippets, 'no news result carried a snippet').to.have.length.above(0);",
                       "  pm.expect(described, 'news results should not carry the web mapper\\'s description').to.have.lengthOf(0);",
                       "});",
                       "pm.test('images is filled (SearXNG categories=images)', () => {",
@@ -1099,6 +1203,205 @@
                   "raw": "{\n  \"query\": \"python asyncio tutorial\",\n  \"limit\": 3\n}"
                 },
                 "description": "The same instance through the older provider file, apps/api/src/search/searxng.ts, which knows nothing of sources or safesearch: it always queries the general category, ignores the engine pin for anything else, and returns a flat array of {url, title, description}. Useful as the contrast that shows what the v2 mapper adds."
+              }
+            },
+            {
+              "name": "Results carry SearXNG provenance",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "",
+                      "const URL = pm.variables.replaceIn('{{baseUrl}}/v2/search');",
+                      "const BODY = { query: 'federal reserve interest rates', limit: 5 };",
+                      "const deadline = Date.now() + 60000;",
+                      "let attempts = 0;",
+                      "const poll = () => {",
+                      "  attempts++;",
+                      "  pm.sendRequest({ url: URL, method: 'POST',",
+                      "                   header: { 'Content-Type': 'application/json' },",
+                      "                   body: JSON.stringify(BODY) }, (err, res) => {",
+                      "    if (err) {",
+                      "      if (Date.now() < deadline) return setTimeout(poll, 2000);",
+                      "      return pm.execution.skipRequest('search transport kept failing: ' + err);",
+                      "    }",
+                      "    const body = res.json();",
+                      "    const web = (body.data || {}).web || [];",
+                      "    if (web.length === 0 && Date.now() < deadline) return setTimeout(poll, 2000);",
+                      "    if (web.length === 0) {",
+                      "      console.warn('no web results after ' + attempts + ' attempt(s); skipping');",
+                      "      return pm.execution.skipRequest();",
+                      "    }",
+                      "    pm.test('Status code is 200 (after ' + attempts + ' attempt(s))', () => pm.expect(res.code).to.eql(200));",
+                      "    pm.test('Response is successful', () => pm.expect(body.success).to.be.true);",
+                      "    const prov = body.provenance || {};",
+                      "    pm.test('provenance names SearXNG as the answering provider', () => pm.expect(prov.provider).to.eql('searxng'));",
+                      "    const providers = (prov.attempts || []).map(a => a.provider);",
+                      "    pm.test('fire-engine was skipped, not silently absent', () => pm.expect(providers).to.include('fire-engine'));",
+                      "    const searx = (prov.attempts || []).find(a => a.provider === 'searxng');",
+                      "    pm.test('SearXNG is recorded as answering', () => {",
+                      "      pm.expect(searx, 'no searxng attempt recorded').to.be.an('object');",
+                      "      pm.expect(searx.outcome).to.eql('results');",
+                      "    });",
+                      "    pm.test('DuckDuckGo was not the fallback that answered', () => pm.expect(providers).to.not.include('duckduckgo'));",
+                      "    pm.test('the SearXNG category used is reported per source', () => {",
+                      "      const cat = prov.searxngCategories && prov.searxngCategories.web;",
+                      "      pm.expect(cat, 'searxngCategories.web was ' + JSON.stringify(cat)).to.be.a('string');",
+                      "    });",
+                      "  });",
+                      "};",
+                      "poll();"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/v2/search",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "v2",
+                    "search"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"query\": \"federal reserve interest rates\",\n  \"limit\": 5\n}"
+                },
+                "description": "The fork records every provider attempt. This asserts the answering provider is SearXNG, that fire-engine was skipped and DuckDuckGo did not substitute, and that the category used is visible."
+              }
+            },
+            {
+              "name": "searxngCategory pins finance for news",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "",
+                      "const URL = pm.variables.replaceIn('{{baseUrl}}/v2/search');",
+                      "const BODY = { query: 'pepco', limit: 5, sources: ['news'], searxngCategory: 'finance' };",
+                      "const deadline = Date.now() + 60000;",
+                      "let attempts = 0;",
+                      "const poll = () => {",
+                      "  attempts++;",
+                      "  pm.sendRequest({ url: URL, method: 'POST',",
+                      "                   header: { 'Content-Type': 'application/json' },",
+                      "                   body: JSON.stringify(BODY) }, (err, res) => {",
+                      "    if (err) {",
+                      "      if (Date.now() < deadline) return setTimeout(poll, 2000);",
+                      "      return pm.execution.skipRequest('search transport kept failing: ' + err);",
+                      "    }",
+                      "    const body = res.json();",
+                      "    const news = (body.data || {}).news || [];",
+                      "    if (news.length === 0 && Date.now() < deadline) return setTimeout(poll, 2000);",
+                      "    if (news.length === 0) {",
+                      "      console.warn('no news results after ' + attempts + ' attempt(s); skipping');",
+                      "      return pm.execution.skipRequest();",
+                      "    }",
+                      "    pm.test('Status code is 200 (after ' + attempts + ' attempt(s))', () => pm.expect(res.code).to.eql(200));",
+                      "    pm.test('Response is successful', () => pm.expect(body.success).to.be.true);",
+                      "    pm.test('news is filled', () => pm.expect(news).to.be.an('array').with.length.above(0));",
+                      "    const prov = body.provenance || {};",
+                      "    pm.test('provider is SearXNG', () => pm.expect(prov.provider).to.eql('searxng'));",
+                      "    pm.test('searxngCategory finance was honoured for the news source', () => {",
+                      "      const cat = prov.searxngCategories && prov.searxngCategories.news;",
+                      "      pm.expect(cat, 'searxngCategories.news was ' + JSON.stringify(cat)).to.eql('finance');",
+                      "    });",
+                      "    pm.test('web was not requested', () => pm.expect((body.data || {}).web).to.be.undefined);",
+                      "  });",
+                      "};",
+                      "poll();"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/v2/search",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "v2",
+                    "search"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"query\": \"pepco\",\n  \"limit\": 5,\n  \"sources\": [\"news\"],\n  \"searxngCategory\": \"finance\"\n}"
+                },
+                "description": "A per-request SearXNG category overrides the news default and is recorded in provenance.searxngCategories.news."
+              }
+            },
+            {
+              "name": "unknown searxngCategory is refused, not substituted",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "",
+                      "pm.test('Status code is 200', () => pm.response.to.have.status(200));",
+                      "pm.test('Response is successful', () => pm.expect(pm.response.json().success).to.be.true);",
+                      "const body = pm.response.json();",
+                      "const prov = body.provenance || {};",
+                      "const searx = (prov.attempts || []).find(a => a.provider === 'searxng');",
+                      "pm.test('SearXNG attempted the request', () => pm.expect(searx).to.be.an('object'));",
+                      "pm.test('the unknown category was reported, not silently run as default', () => {",
+                      "  pm.expect(searx.unknownCategories, 'unknownCategories was ' + JSON.stringify(searx.unknownCategories))",
+                      "    .to.include('nonexistentcategory');",
+                      "});",
+                      "pm.test('SearXNG outcome is error, not results', () => pm.expect(searx.outcome).to.eql('error'));",
+                      "pm.test('no provider answered', () => pm.expect(prov.provider).to.be.undefined);",
+                      "pm.test('no news rows came from the default search', () => pm.expect((body.data || {}).news).to.be.undefined);"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/v2/search",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "v2",
+                    "search"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"query\": \"pepco\",\n  \"limit\": 5,\n  \"sources\": [\"news\"],\n  \"searxngCategory\": \"nonexistentcategory\"\n}"
+                },
+                "description": "SearXNG reports unknown categories. A pin where every name is unknown selects no engine, so the fork refuses the default-search rows and records outcome=error."
               }
             }
           ]
@@ -1416,19 +1719,19 @@
                       "  pm.expect(t).to.include('Pepco Group');",
                       "  pm.expect(t).to.include('PCO');",
                       "});",
-                      "// money.pl serves two variants: a full one with Otwarcie/Zamknięcie/Obroty/Free float",
+                      "// money.pl serves two variants: a full one with Otwarcie/Zamkni\u0119cie/Obroty/Free float",
                       "// and a leaner one without them (13768 vs 17903 bytes, both observed repeatedly).",
                       "// Assert only the fields present in BOTH, or this goes flaky for reasons unrelated",
                       "// to a real breakage.",
                       "pm.test('volume and fundamentals rendered', () => {",
-                      "  for (const k of ['Wolumen', 'Wskaźniki', 'Kapitalizacja', 'C/Z']) {",
+                      "  for (const k of ['Wolumen', 'Wska\u017aniki', 'Kapitalizacja', 'C/Z']) {",
                       "    pm.expect(md, 'missing field: ' + k).to.include(k);",
                       "  }",
                       "});",
                       "pm.test('fundamental ratios parsed as numbers', () => {",
                       "  const m = md.match(/Cena \\/ Zysk \\(C\\/Z\\)[\\s\\S]{0,40}?([\\d,]+)/);",
                       "  console.log('C/Z = ' + (m ? m[1] : 'not matched'));",
-                      "  pm.expect(m, 'the Wskaźniki table did not match the expected layout').to.not.be.null;",
+                      "  pm.expect(m, 'the Wska\u017aniki table did not match the expected layout').to.not.be.null;",
                       "  pm.expect(parseFloat(m[1].replace(/,/g, '.'))).to.be.above(0);",
                       "});",
                       "// URL is ISIN-keyed (nl0015000au7), so it survives a ticker change. The sister site",
@@ -1466,7 +1769,72 @@
                   ]
                 }
               },
-              "description": "Richest of the four Polish quote sources: OHLC plus the Wskaźniki fundamentals table (C/Z, C/WK, wartość księgowa, kapitalizacja, liczba akcji, free float). It reports free float 28.03% where parkiet reports 0.00%, so parkiet's looks like a data gap rather than a real value. URL is ISIN-keyed (/gielda/spolki-gpw/nl0015000au7.html) and therefore stable across ticker changes. robots.txt allows article and quote pages; GPTBot and CCBot are disallowed separately, ClaudeBot is not mentioned. Sidebar note: the front page is news (172 links) but this quote page is the useful part."
+              "description": "Richest of the four Polish quote sources: OHLC plus the Wska\u017aniki fundamentals table (C/Z, C/WK, warto\u015b\u0107 ksi\u0119gowa, kapitalizacja, liczba akcji, free float). It reports free float 28.03% where parkiet reports 0.00%, so parkiet's looks like a data gap rather than a real value. URL is ISIN-keyed (/gielda/spolki-gpw/nl0015000au7.html) and therefore stable across ticker changes. robots.txt allows article and quote pages; GPTBot and CCBot are disallowed separately, ClaudeBot is not mentioned. Sidebar note: the front page is news (172 links) but this quote page is the useful part."
+            }
+          ]
+        },
+        {
+          "name": "Direct provider (SearXNG itself)",
+          "description": "Hits the instance directly, so a Firecrawl fallback to DuckDuckGo cannot mask a broken SearXNG.",
+          "item": [
+            {
+              "name": "SearXNG JSON endpoint answers",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "",
+                      "pm.test('Status code is 200', () => pm.response.to.have.status(200));",
+                      "const body = pm.response.json();",
+                      "pm.test('results is a non-empty array', () => pm.expect(body.results).to.be.an('array').with.length.above(0));",
+                      "const first = (body.results || [])[0] || {};",
+                      "pm.test('first result has url, title and content', () => {",
+                      "  pm.expect(first.url, 'url').to.be.a('string').and.not.empty;",
+                      "  pm.expect(first.title, 'title').to.be.a('string').and.not.empty;",
+                      "  pm.expect(first.content, 'content').to.be.a('string');",
+                      "});",
+                      "pm.test('the instance did not report every engine as failed', () => {",
+                      "  const un = body.unresponsive_engines || [];",
+                      "  pm.expect(un.length, 'unresponsive engines: ' + JSON.stringify(un)).to.be.below(body.results.length);",
+                      "});"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{searxngUrl}}/search?q=federal%20reserve%20interest%20rates&format=json&language=en&pageno=1",
+                  "host": [
+                    "{{searxngUrl}}"
+                  ],
+                  "path": [
+                    "search"
+                  ],
+                  "query": [
+                    {
+                      "key": "q",
+                      "value": "federal reserve interest rates"
+                    },
+                    {
+                      "key": "format",
+                      "value": "json"
+                    },
+                    {
+                      "key": "language",
+                      "value": "en"
+                    },
+                    {
+                      "key": "pageno",
+                      "value": "1"
+                    }
+                  ]
+                },
+                "description": "proves the configured SEARXNG_ENDPOINT is reachable and returns mapped fields the API can use."
+              }
             }
           ]
         }

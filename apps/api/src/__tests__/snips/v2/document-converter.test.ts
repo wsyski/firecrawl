@@ -68,9 +68,9 @@ describe("Document Converter tests", () => {
 
   describe("unrecognized content", () => {
     it("should reject content that is not a supported document", async () => {
-      await expect(
+      expect(() =>
         convertDocumentToMarkdown(new Uint8Array([1, 2, 3, 4, 5])),
-      ).rejects.toThrow();
+      ).toThrow();
     });
   });
 });

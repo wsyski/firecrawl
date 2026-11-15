@@ -22,17 +22,18 @@ const MAX_FIELD_CHARS = 500;
 const clip = (text: string | undefined): string | null =>
   text ? text.slice(0, MAX_FIELD_CHARS) : null;
 
+// Jev rejects a question payload of roughly 500+ characters with a bare 400,
+// so keep the whole question block short.
 const questions = {
   explicit: noul(
     {
-      task: "`result` is one result a web search returned. Is the result adult content, or does it mention an adult content platform?",
-      guidance:
-        "Judge the result's own title, snippet and URL. Any mention of an adult content platform counts, in any context, including news, business, software, tax or creator advice.",
+      task: "Is `result` adult content or does it mention an adult platform?",
+      guidance: "Judge the title, snippet and URL; any mention counts.",
     },
     {
-      true: "Pornographic or sexually explicit material; NSFW or sex AI generators and chat; escorting or camming; or any mention of an adult content platform or adult creator subscription site such as OnlyFans, Fansly, ManyVids, Chaturbate or Pornhub, including guides, comparisons, clones and news about them.",
+      true: "Pornographic/NSFW, escorting/camming, or any adult platform mention.",
       false:
-        "Anything else, including sex education, sexual health and medicine, dating, fashion, and uses of 'adult' that mean grown-up, such as adult education or adult ADHD.",
+        "Anything else; sex education, health, dating, fashion, 'adult'=grown-up.",
     },
   ),
 };
