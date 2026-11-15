@@ -41,7 +41,7 @@ All LLM-side behaviour lives in `localModelFetch` (`apps/api/src/lib/local-model
 (`10/8`, `172.16/12`, `192.168/16`, `100.64/10`), a single-label host (docker service name) or
 `*.local` / `*.lan` / `*.internal` (incl. `host.docker.internal`). It adds fields to chat bodies and never
 changes a field the caller already set, including `model`. Unit tests: `apps/api/src/lib/local-model.test.ts`,
-or the whole unit layer in one command with `bin/unit-tests.sh` ([DESIGN.md](DESIGN.md#running-the-unit-layer)).
+or the whole unit layer in one command with `bin/tests.sh` ([DESIGN.md](DESIGN.md#running-the-unit-layer)).
 
 **Cloud model.** Any other `OPENAI_BASE_URL` (e.g. `https://openrouter.ai/api/v1`) is a cloud API: requests go
 out exactly as the SDK builds them, with `MODEL_NAME` as the model and none of `LLM_DISABLE_THINKING`,
@@ -385,7 +385,7 @@ the old text. `--check` skips cleanly when there is no hub, so CI is unaffected.
 
 ### Keeping up with upstream
 
-`git fetch upstream && git merge upstream/main`, then run the unit tests above (`bin/unit-tests.sh`), rebuild the
+`git fetch upstream && git merge upstream/main`, then run the unit tests above (`bin/tests.sh`), rebuild the
 `api` image (`bin/deploy-docker.sh --apply`) and repeat the JSON extraction example. Conflicts, if any, are in
 `local-model.ts`, `generic-ai.ts`, `search/execute.ts`, `config.ts`, `controllers/v1/types.ts`,
 `docker-compose.yaml` and this section of the README.
