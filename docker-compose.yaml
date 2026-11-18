@@ -65,7 +65,6 @@ x-common-env: &common-env
   LLM_LOCK_FILE: ${LLM_LOCK_FILE:-}
   ALLOW_LOCAL_WEBHOOKS: ${ALLOW_LOCAL_WEBHOOKS:-false}
   MODEL_NAME: ${MODEL_NAME}
-  MODEL_EMBEDDING_NAME: ${MODEL_EMBEDDING_NAME}
   OLLAMA_BASE_URL: ${OLLAMA_BASE_URL}
   # TypeSafe Jev: the /search safe filter, and branding when BRANDING_JEV* selects
   # the team. TYPESAFE_BASE_URL is the API root (the SDK appends /v1/systemone);

@@ -94,7 +94,7 @@ describe("Engine Forcing", () => {
       expect(getEngineForUrl("")).toBeUndefined();
     });
 
-    it("returns undefined when the module was never initialized", async () => {
+    it("should return undefined if not initialized", async () => {
       delete config.FORCED_ENGINE_DOMAINS;
       // Re-import a fresh, uninitialized module instance.
       vi.resetModules();

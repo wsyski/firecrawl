@@ -43,6 +43,7 @@ import {
   RemoveFeatureError,
   SiteError,
   SiteRestrictionError,
+  SiteBlockNoRetryError,
   UnsupportedFileError,
   SSLError,
   PDFInsufficientTimeError,
@@ -63,6 +64,7 @@ import {
   UsOnlyUnavailableError,
   ReservedCapacityUnavailableError,
   ExchangeRefusedError,
+  PaywalledContentError,
 } from "./error";
 import { ScrapeRetryTracker } from "./retryTracker";
 import {
@@ -134,6 +136,7 @@ import {
 import { resolveThreatProtection } from "../../lib/threat-protection/request";
 import { isUsOnly, usOnlyLocationRefusal } from "../../lib/us-only";
 import { loadFirstScreen } from "../../lib/branding/jev";
+import { isPaywalledByJsonLd } from "./lib/accessibleForFree";
 import { UnsafeDomainBlockedError } from "../../lib/threat-protection/error";
 import { canonicalizeUrl } from "../../lib/threat-protection/providers/web-risk/canonicalize";
 
@@ -200,6 +203,10 @@ export type Meta = {
         status: number;
         proxyUsed: "basic" | "stealth";
         contentType?: string;
+        /** Set when the file came from a browser handoff (inline bytes), with
+         * the body length the response declared, so the pdf engine can tell
+         * a capture that stopped short and download the file again. */
+        handoff?: { contentLength?: number };
         /** Set when fire-engine handed the file off by GCS reference (large
          * PDFs): the object it uploaded, so the FirePDF by-reference path
          * can server-side copy it instead of re-uploading the bytes. The
@@ -618,7 +625,6 @@ export type InternalOptions = {
   v0CrawlOnlyUrls?: boolean;
   v0DisableJsDom?: boolean;
   disableSmartWaitCache?: boolean; // Passed along to fire-engine
-  isBackgroundIndex?: boolean;
   externalAbort?: AbortInstance;
   urlInvisibleInCurrentCrawl?: boolean;
   unnormalizedSourceURL?: string;
@@ -905,7 +911,7 @@ async function scrapeURLLoop(meta: Meta): Promise<ScrapeUrlResponse> {
 
     const remainingEngines = [...fallbackList];
     let enginePromises: EngineBundlePromise[] = [];
-    const enginesAttempted: string[] = [];
+    const enginesAttempted: Engine[] = [];
 
     meta.abort.throwIfAborted();
 
@@ -993,6 +999,17 @@ async function scrapeURLLoop(meta: Meta): Promise<ScrapeUrlResponse> {
           break;
         } catch (error) {
           if (error instanceof WrappedEngineError) {
+            if (error.error instanceof SiteBlockNoRetryError) {
+              // Another engine or exit doesn't get past it either (the engine
+              // has logged the block); end the scrape the usual way instead of
+              // trying them, and stop the engines still racing.
+              snipeAbortController.abort();
+              setSpanAttributes(span, {
+                "engine.no_engines_left": true,
+                "engine.engines_attempted": enginesAttempted.join(","),
+              });
+              throw new NoEnginesLeftError(enginesAttempted);
+            }
             const nextEngine = remainingEngines[0]?.engine;
             const experiment = waterfallExperimentFor(
               error.engine,
@@ -1205,6 +1222,14 @@ async function scrapeURLLoop(meta: Meta): Promise<ScrapeUrlResponse> {
           );
         }
       }
+    }
+
+    // Throws before the transformers, so a blocked page is never indexed.
+    if (
+      meta.internalOptions.safeMode?.respectPaywalls &&
+      isPaywalledByJsonLd(engineResult.html)
+    ) {
+      throw new PaywalledContentError();
     }
 
     let document: Document = {
@@ -2010,6 +2035,9 @@ export async function scrapeURL(
               rule: error.decision.rule,
             },
           );
+        } else if (error instanceof PaywalledContentError) {
+          errorType = "PaywalledContentError";
+          meta.logger.warn("scrapeURL: Paywalled page refused by Safe Mode");
         } else if (error instanceof AbortManagerThrownError) {
           errorType = "AbortManagerThrownError";
           throw error.inner;

@@ -1,9 +1,11 @@
+// Keep the config import first: it removes an empty OPENAI_BASE_URL from the
+// environment, and @ai-sdk/openai throws on one as soon as it is loaded.
+import { config } from "../config";
 import { createOpenAI } from "@ai-sdk/openai";
 import { wrapLanguageModel, type LanguageModelMiddleware } from "ai";
-import { config } from "../config";
 import { isLocalLlmUrl, localModelFetch } from "./local-model";
 import { createOllama } from "ollama-ai-provider-v2";
-import { anthropic } from "@ai-sdk/anthropic";
+import { anthropic as keyedAnthropic } from "@ai-sdk/anthropic";
 import { groq } from "@ai-sdk/groq";
 import { google } from "@ai-sdk/google";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
@@ -11,6 +13,8 @@ import { fireworks } from "@ai-sdk/fireworks";
 import { deepinfra } from "@ai-sdk/deepinfra";
 import { createVertex } from "@ai-sdk/google-vertex";
 import { withUsageTelemetry } from "./ai-usage-telemetry";
+import { createFederatedAnthropic } from "./anthropic-federation";
+import { createFederatedOpenAI } from "./openai-federation";
 import type { TeamFlags } from "../controllers/v2/types";
 import { isUsOnly } from "./us-only";
 import { UsOnlyUnavailableError } from "../scraper/scrapeURL/error";
@@ -37,18 +41,41 @@ const vertexAuthOptions = config.VERTEX_CREDENTIALS
         keyFile: "./gke-key.json",
       };
 
+// An API key wins while it is set, so federation can be rolled out next to it.
+const anthropic =
+  !config.ANTHROPIC_API_KEY &&
+  config.ANTHROPIC_FEDERATION_RULE_ID &&
+  config.ANTHROPIC_ORGANIZATION_ID
+    ? createFederatedAnthropic(
+        config.ANTHROPIC_FEDERATION_RULE_ID,
+        config.ANTHROPIC_ORGANIZATION_ID,
+      )
+    : keyedAnthropic;
+
+const openai =
+  !config.OPENAI_API_KEY &&
+  config.OPENAI_IDENTITY_PROVIDER_ID &&
+  config.OPENAI_SERVICE_ACCOUNT_ID
+    ? createFederatedOpenAI(
+        config.OPENAI_IDENTITY_PROVIDER_ID,
+        config.OPENAI_SERVICE_ACCOUNT_ID,
+      )
+    : createOpenAI({
+        apiKey: config.OPENAI_API_KEY,
+        baseURL: config.OPENAI_BASE_URL,
+        // a local base URL is llama-swap: add the llama.cpp fields; a cloud one
+        // gets the request (and MODEL_NAME) exactly as the SDK built it
+        ...(isLocalLlmUrl(config.OPENAI_BASE_URL)
+          ? { fetch: localModelFetch }
+          : {}),
+      });
+
 const providerList: Record<Provider, any> = {
-  openai: createOpenAI({
-    apiKey: config.OPENAI_API_KEY,
-    baseURL: config.OPENAI_BASE_URL,
-    // a local base URL is llama-swap: add the llama.cpp fields; a cloud one
-    // gets the request (and MODEL_NAME) exactly as the SDK built it
-    ...(isLocalLlmUrl(config.OPENAI_BASE_URL) ? { fetch: localModelFetch } : {}),
-  }), //OPENAI_API_KEY
+  openai, //OPENAI_API_KEY or workload identity federation
   ollama: createOllama({
     baseURL: config.OLLAMA_BASE_URL,
   }),
-  anthropic, //ANTHROPIC_API_KEY
+  anthropic, //ANTHROPIC_API_KEY or workload identity federation
   groq, //GROQ_API_KEY
   google, //GOOGLE_GENERATIVE_AI_API_KEY
   openrouter: createOpenRouter({
@@ -66,15 +93,22 @@ const providerList: Record<Provider, any> = {
   }),
 };
 
-// Without its own key the US client must not exist: createOpenAI would fall
-// back to the OPENAI_API_KEY environment variable. The endpoint is fixed so no
-// configuration can send US-only traffic elsewhere.
+// Without its own key or service account the US client must not exist:
+// createOpenAI would fall back to the OPENAI_API_KEY environment variable. The
+// endpoint is fixed so no configuration can send US-only traffic elsewhere.
+const usOpenAIBaseURL = "https://us.api.openai.com/v1";
 const usOpenAI = config.OPENAI_US_API_KEY
   ? createOpenAI({
       apiKey: config.OPENAI_US_API_KEY,
-      baseURL: "https://us.api.openai.com/v1",
+      baseURL: usOpenAIBaseURL,
     })
-  : undefined;
+  : config.OPENAI_IDENTITY_PROVIDER_ID && config.OPENAI_US_SERVICE_ACCOUNT_ID
+    ? createFederatedOpenAI(
+        config.OPENAI_IDENTITY_PROVIDER_ID,
+        config.OPENAI_US_SERVICE_ACCOUNT_ID,
+        usOpenAIBaseURL,
+      )
+    : undefined;
 
 const usVertex = createVertex({
   project: "firecrawl",
@@ -93,7 +127,7 @@ const usVertexModels = new Set([
 ]);
 
 const usInferenceGeo: LanguageModelMiddleware = {
-  specificationVersion: "v3",
+  specificationVersion: "v4",
   transformParams: async ({ params }) => ({
     ...params,
     providerOptions: {
@@ -146,9 +180,6 @@ export function getModel(
   provider: Provider = defaultProvider,
   options?: ModelOptions,
 ) {
-  if (name === "gemini-2.5-pro") {
-    name = "gemini-2.5-pro";
-  }
   const modelName = options?.ignoreModelOverride
     ? name
     : config.MODEL_NAME || name;
@@ -169,19 +200,4 @@ export function getModel(
     return withUsageTelemetry(providerList.openai.chat(modelName));
   }
   return withUsageTelemetry(providerList[provider](modelName));
-}
-
-export function getEmbeddingModel(
-  name: string,
-  provider: Provider = defaultProvider,
-  options?: Pick<ModelOptions, "teamFlags" | "feature">,
-) {
-  const modelName = config.MODEL_EMBEDDING_NAME || name;
-  if (isUsOnly(options?.teamFlags ?? undefined)) {
-    if (provider !== "openai" || !usOpenAI) {
-      throw usOnlyUnavailable(options?.feature);
-    }
-    return usOpenAI.embedding(modelName);
-  }
-  return providerList[provider].embedding(modelName);
 }

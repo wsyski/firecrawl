@@ -402,7 +402,7 @@ the old text. `--check` skips cleanly when there is no hub, so CI is unaffected.
 
 # **🔥 Firecrawl**
 
-**The API to search, scrape, and interact with the web at scale. Firecrawl is the context API for AI agents. 🔥** Open source and available as a [hosted service](https://firecrawl.dev/?ref=github).
+**Knowledge infrastructure to make your agents smarter. 🔥** Search, scrape, and interact with the web at scale, and reach 550+ data providers through [Firecrawl Alexandria](https://alexandria.firecrawl.dev). Open source and available as a [hosted service](https://firecrawl.dev/?ref=github).
 
 _Pst. Hey, you, join our stargazers :)_
 
@@ -445,7 +445,7 @@ _Pst. Hey, you, join our stargazers :)_
 | [**Map**](#map) | Discover all URLs on a website instantly |
 | [**Batch Scrape**](#batch-scrape) | Scrape thousands of URLs asynchronously |
 | [**Monitor**](https://docs.firecrawl.dev/features/monitoring) | Get notified when content on a website changes |
-| [**Alexandria**](#alexandria) | Give your agent 400+ data providers and specialized indexes (via Firecrawl Cloud) |
+| [**Firecrawl Alexandria**](#alexandria) | Give your agent 550+ data providers and specialized indexes (via Firecrawl Cloud) |
 
 ---
 
@@ -671,7 +671,7 @@ See the [Skill + CLI documentation](https://docs.firecrawl.dev/sdks/cli) for all
 
 ## Alexandria
 
-[Alexandria](https://alexandria.firecrawl.dev) gives your agents 400+ data providers and specialized indexes through one API, MCP, or CLI. Agents discover a tool alongside their web results, inspect its inputs and pricing, then run it to get structured data. Discovery is free; execution uses the credits listed on the tool.
+[Firecrawl Alexandria](https://alexandria.firecrawl.dev) is knowledge infrastructure to make your agents smarter: 550+ data providers in one library (250M+ people, 75M+ companies, 41M+ research papers), plus specialized indexes and the live web, through one API, MCP, or CLI. Agents discover a tool alongside their web results, inspect its inputs and pricing, then run it to get structured data. Discovery is free; execution uses the credits listed on the tool.
 
 Install it in your agent from [alexandria.firecrawl.dev](https://alexandria.firecrawl.dev), or see the [Alexandria documentation](https://docs.firecrawl.dev/features/alexandria) for CLI, MCP, SDK, and API usage.
 
@@ -840,7 +840,7 @@ Response:
 {
   "success": true,
   "links": [
-    {"url": "https://firecrawl.dev", "title": "Firecrawl", "description": "The context API for AI agents"},
+    {"url": "https://firecrawl.dev", "title": "Firecrawl", "description": "Knowledge infrastructure to make your agents smarter"},
     {"url": "https://firecrawl.dev/pricing", "title": "Pricing", "description": "Firecrawl pricing plans"},
     {"url": "https://firecrawl.dev/blog", "title": "Blog", "description": "Firecrawl blog"}
   ]
