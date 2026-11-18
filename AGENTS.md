@@ -9,8 +9,12 @@ infrastructure, and toolchain quirks.
   with `git fetch upstream && git merge upstream/main`.
 - Fork-only LLM behavior: `apps/api/src/lib/local-model.ts` (`localModelFetch`, `isLocalLlmUrl`, the
   thinking/slot/lock fields) and `apps/api/src/lib/generic-ai.ts` (installs it as the OpenAI provider's
-  `fetch` when `OPENAI_BASE_URL` is local). Upstream merges are most likely to conflict in those two,
-  plus `config.ts`, `controllers/v1/types.ts`, `docker-compose.yaml`, and the README fork section.
+  `fetch` when `OPENAI_BASE_URL` is local).
+- Fork-only search layer: `apps/api/src/search/v2/` (`index.ts`, `searxng.ts`, `provenance.ts`, with
+  `index.test.ts` and `index.team-plan-class.test.ts`) routes search through the local SearXNG and adds
+  `.provenance` to results.
+- Upstream merges are most likely to conflict in the fork-only files above, plus `config.ts`,
+  `controllers/v1/types.ts`, `docker-compose.yaml`, and the README fork section.
 - **Agent skill:** `skills/firecrawl/` is the source of truth for the `/firecrawl` skill in the user
   hub (`~/.agents/skills/firecrawl`). It documents only what this instance does. After editing it, run
   `bin/deploy-skills.sh --apply`; `bin/deploy-skills.sh --check` fails on drift, and with no flag the

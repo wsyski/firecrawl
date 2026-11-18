@@ -21,9 +21,11 @@ LLM formats go to llama-swap (`192.168.1.100:8081`); search goes to SearXNG (`19
 - `maxConcurrency` is 2 and the GPU is shared: **run requests sequentially**.
 
 Every command below was re-run against this instance on 2026-11-14 (build at upstream merge
-`97332ad00`): health, scrape (markdown and json through the local model, 13.8 s warm), search
-(web + news, SearXNG answering with fire-engine skipped), the `github` category rejection and the
-`fc` wrapper all behave as written. Crawl, batch and parse carry over from the 2026-10-11 pass.
+`97332ad00`); the 2026-11-18 merge to `78dff6264` re-checked the search, scrape and LLM paths on
+the rebuilt container: health, scrape (markdown 0.45 s; json 28 s cold, summary 6.8 s warm), search
+(web + news, SearXNG answering with fire-engine skipped, `.provenance` intact), the `github`
+category rejection and the `fc` wrapper still behave as written. Crawl, batch and parse carry over
+from the 2026-10-11 pass.
 
 ## `fc` (preferred)
 
@@ -189,8 +191,8 @@ HTML and PDF verified.
 ## Test suite (operator)
 
 - Unit layer: `bin/tests.sh` from the repo root (it calls the pinned vitest, starts a throwaway
-  redis, and removes it on exit). Current run: 335 files pass, 9 skip, 0 fail — 4954 tests pass,
-  92 skip.
+  redis, and removes it on exit). Current run (2026-11-18, merge `78dff6264`): 354 files pass,
+  8 skip, 0 fail — 5307 tests pass, 114 skip.
 - Snips: `cd apps/api && corepack pnpm harness pnpm test:snips` with
   `TEST_SUITE_SELF_HOSTED=true`, `TEST_SUITE_WEBSITE=http://127.0.0.1:4321` and
   `ALLOW_LOCAL_WEBHOOKS=true`. The harness owns the API/workers; do not run the snips against the
@@ -212,5 +214,7 @@ These need fire-engine, browser sessions or cloud billing, so plan without them:
 
 Same for the upstream catalogue and research backends: `sources: ["alexandria","skills"]` need
 `FIRE_EXCHANGE_URL`, the `research`/`developer` categories need `RESEARCH_PROXY_URL`, and `gov` routing
-needs `GOV_ROUTING_ENABLED` + `SEARCH_PLATFORM_URL`. None is set here, so those inputs are skipped and
-answer nothing (no error) — stay on `sources: web/news/images` with no `categories`.
+needs `GOV_ROUTING_ENABLED` + `SEARCH_PLATFORM_URL`. The `/v2/alexandria` provider route added in the
+2026-11-18 merge needs `FIRE_EXCHANGE_URL` too and answers `This endpoint is not available.` without it.
+None is set here, so those inputs are skipped and answer nothing (no error) — stay on
+`sources: web/news/images` with no `categories`.
