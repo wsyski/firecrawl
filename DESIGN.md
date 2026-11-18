@@ -49,10 +49,16 @@ feature landed), `specialtyHandler.test.ts` to an SVG fixture (JP2 became OCR-ha
 unparenthesized `site:` group (`aa85f190a`), the sunset route test to v0_scrape's now-present sunset, the exchange
 ZDR test to a route that does not refuse forced-ZDR teams, and `ranker.test.ts` self-skips without
 `OPENAI_API_KEY` (embeddings are live). `WebScraper/__tests__/utils.test.ts` was deleted — it tested
-`WebCrawler.noSections`, removed upstream in `ba9fbd0ad`. `scrapeURL.test.ts` (49 of the 69 failures: hosted
+`WebCrawler.noSections`, removed upstream in `ba9fbd0ad` — and came back in the 2026-11-18 merge, rewritten
+upstream to drive `filterURL`; that version is kept. `scrapeURL.test.ts` (49 of the 69 failures: hosted
 fire-engine, `httpstat.us`, LLM extract, drifted live pages) is excluded from this layer rather than fixed — it
 needs services, not assertions. Expect merge conflicts in those test files if upstream fixes the same drift; take
 upstream's version when it matches this behavior.
+
+Re-measured 2026-11-18 after merging `upstream/main` (`0e535bc53`): 354 files pass, 8 skip, 0 fail (5307 tests
+passed, 114 skipped). The merge took upstream's rewritten `WebScraper/__tests__/utils.test.ts` and dropped
+`ranker.test.ts` with the module upstream deleted; the upstream `index.test.ts` team-plan tests were split into
+`index.team-plan-class.test.ts` because the fork's `index.test.ts` mocks the fire-engine client outright.
 
 ### Running one snip against an already-running stack
 
